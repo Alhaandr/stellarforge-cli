@@ -8,6 +8,7 @@ import type { DevProcessSpec } from './project.js';
 interface ManagedStream {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
 export interface ManagedChildProcess {
@@ -54,12 +55,14 @@ const MAX_BUFFERED_LINE_LENGTH = 64 * 1024;
 
 interface PrefixedLineWriter {
   write(chunk: Buffer | string): void;
-  flush(): void;
+  end(): void;
 }
 
 // Child output is untrusted: buffer partial lines so secret-like values split
 // across chunks are still redacted as a whole before reaching the terminal.
-// Bare carriage returns are treated as line boundaries (progress-frame
+// Each stream uses its own streaming UTF-8 decoder, so a multi-byte character
+// split between chunks is reconstructed instead of being replaced with
+// U+FFFD. Bare carriage returns are treated as line boundaries (progress-frame
 // separators): every frame is emitted as its own complete line, never as a
 // raw CR, so progress updates cannot overwrite terminal content already on
 // screen. A CR-terminated frame with no text creates no line at all.
@@ -69,6 +72,8 @@ function createPrefixedLineWriter(
   isError: boolean,
 ): PrefixedLineWriter {
   let pending = '';
+  let ended = false;
+  const decoder = new TextDecoder('utf-8');
 
   const emit = (line: string): void => {
     if (line.length === 0) {
@@ -83,21 +88,50 @@ function createPrefixedLineWriter(
     }
   };
 
+  // Splits decoded text into complete lines, keeping the trailing partial
+  // line in the pending buffer. Redaction stays line-based, which is only
+  // sound while no line reaches the terminal before its final byte arrives.
+  const feed = (text: string): void => {
+    const lines = `${pending}${text}`.split(/\r?\n|\r/);
+    pending = lines.pop() ?? '';
+
+    for (const line of lines) {
+      emit(line);
+    }
+
+    if (pending.length > MAX_BUFFERED_LINE_LENGTH) {
+      emit(pending);
+      pending = '';
+    }
+  };
+
   return {
     write(chunk) {
-      const lines = `${pending}${String(chunk)}`.split(/\r?\n|\r/);
-      pending = lines.pop() ?? '';
-
-      for (const line of lines) {
-        emit(line);
+      if (ended) {
+        return;
       }
 
-      if (pending.length > MAX_BUFFERED_LINE_LENGTH) {
-        emit(pending);
-        pending = '';
-      }
+      // String chunks are passed through untouched for tests; byte chunks
+      // stream through the decoder, holding incomplete trailing sequences.
+      feed(
+        typeof chunk === 'string'
+          ? chunk
+          : decoder.decode(chunk, { stream: true }),
+      );
     },
-    flush() {
+    end() {
+      if (ended) {
+        return;
+      }
+
+      ended = true;
+      // Flush any held bytes (complete the final code point or emit U+FFFD
+      // for a truncated one), then emit the final partial line exactly once.
+      const tail = decoder.decode();
+      if (tail.length > 0) {
+        feed(tail);
+      }
+
       emit(pending);
       pending = '';
     },
@@ -143,12 +177,27 @@ export async function superviseDevProcesses(
       let remaining = specs.length;
       let settled = false;
 
+      interface ChildState {
+        label: string;
+        stdoutWriter: PrefixedLineWriter;
+        stderrWriter: PrefixedLineWriter;
+        stdoutDone: boolean;
+        stderrDone: boolean;
+        exited: boolean;
+        exitCode: number | null;
+        exitSignal: NodeJS.Signals | null;
+        completed: boolean;
+      }
+
       const fail = (message: string, cause?: Error): void => {
         if (settled) {
           return;
         }
 
         settled = true;
+        // Signal siblings for cleanup but leave still-open streams alone: a
+        // later flush there could emit half of a sensitive assignment. Any
+        // pending line stays bounded in the writer until its stream ends.
         stopChildren('SIGTERM');
         reject(
           new SubprocessCliError(
@@ -156,6 +205,39 @@ export async function superviseDevProcesses(
             cause === undefined ? undefined : { cause },
           ),
         );
+      };
+
+      // Exit and stdio completion are separate events: a child only settles
+      // once its exit has been observed AND every stream has ended. Flushing
+      // before that could split a sensitive assignment across the flush
+      // boundary and defeat line-based redaction.
+      const maybeComplete = (state: ChildState): void => {
+        if (
+          settled ||
+          state.completed ||
+          !state.exited ||
+          !state.stdoutDone ||
+          !state.stderrDone
+        ) {
+          return;
+        }
+
+        state.completed = true;
+        remaining -= 1;
+
+        if (!shuttingDown && state.exitCode !== 0) {
+          fail(
+            `Development process '${state.label}' exited unexpectedly${
+              state.exitCode === null ? '' : ` with code ${state.exitCode}`
+            }${state.exitSignal === null ? '' : ` after ${state.exitSignal}`}.`,
+          );
+          return;
+        }
+
+        if (remaining === 0) {
+          settled = true;
+          resolve();
+        }
       };
 
       for (const spec of specs) {
@@ -172,41 +254,63 @@ export async function superviseDevProcesses(
         }
 
         children.push(child);
-        const stdoutWriter = createPrefixedLineWriter(
-          output,
-          spec.label,
-          false,
-        );
-        const stderrWriter = createPrefixedLineWriter(output, spec.label, true);
-        const flushOutput = (): void => {
-          stdoutWriter.flush();
-          stderrWriter.flush();
+        const state: ChildState = {
+          label: spec.label,
+          stdoutWriter: createPrefixedLineWriter(output, spec.label, false),
+          stderrWriter: createPrefixedLineWriter(output, spec.label, true),
+          stdoutDone: false,
+          stderrDone: false,
+          exited: false,
+          exitCode: null,
+          exitSignal: null,
+          completed: false,
         };
-        child.stdout.on('data', (chunk) => stdoutWriter.write(chunk));
-        child.stdout.on('end', () => stdoutWriter.flush());
-        child.stderr.on('data', (chunk) => stderrWriter.write(chunk));
-        child.stderr.on('end', () => stderrWriter.flush());
+
+        child.stdout.on('data', (chunk) => state.stdoutWriter.write(chunk));
+        child.stdout.on('end', () => {
+          state.stdoutDone = true;
+          state.stdoutWriter.end();
+          maybeComplete(state);
+        });
+        child.stdout.on('error', (error) => {
+          // A failed stream can never emit 'end'; mark it done, flush only
+          // its own final output (redacted, bounded), and fail the supervisor.
+          // Raw stream errors and local paths never reach the terminal.
+          if (!state.stdoutDone) {
+            state.stdoutDone = true;
+            state.stdoutWriter.end();
+          }
+
+          fail(
+            `Development process '${state.label}' stdout stream failed.`,
+            error,
+          );
+        });
+        child.stderr.on('data', (chunk) => state.stderrWriter.write(chunk));
+        child.stderr.on('end', () => {
+          state.stderrDone = true;
+          state.stderrWriter.end();
+          maybeComplete(state);
+        });
+        child.stderr.on('error', (error) => {
+          if (!state.stderrDone) {
+            state.stderrDone = true;
+            state.stderrWriter.end();
+          }
+
+          fail(
+            `Development process '${state.label}' stderr stream failed.`,
+            error,
+          );
+        });
         child.once('error', (error) => {
-          flushOutput();
           fail(`Development process '${spec.label}' failed to start.`, error);
         });
         child.once('exit', (code, signal) => {
-          flushOutput();
-          remaining -= 1;
-
-          if (!shuttingDown && code !== 0) {
-            fail(
-              `Development process '${spec.label}' exited unexpectedly${
-                code === null ? '' : ` with code ${code}`
-              }${signal === null ? '' : ` after ${signal}`}.`,
-            );
-            return;
-          }
-
-          if (!settled && remaining === 0) {
-            settled = true;
-            resolve();
-          }
+          state.exited = true;
+          state.exitCode = code;
+          state.exitSignal = signal;
+          maybeComplete(state);
         });
       }
     });
