@@ -60,38 +60,38 @@ describe('generated template .gitignore policy', () => {
     '%s ignores local state without hiding project files',
     (id) =>
       withTempDirectory((root) => {
-      const ignoreFile = readFileSync(
-        join(repositoryRoot, 'templates', id, '.gitignore'),
-        'utf8',
-      );
-      writeFileSync(join(root, '.gitignore'), ignoreFile);
+        const ignoreFile = readFileSync(
+          join(repositoryRoot, 'templates', id, '.gitignore'),
+          'utf8',
+        );
+        writeFileSync(join(root, '.gitignore'), ignoreFile);
 
-      const initialized = git(root, ['init', '--quiet']);
-      expect(initialized.status, initialized.stderr).toBe(0);
+        const initialized = git(root, ['init', '--quiet']);
+        expect(initialized.status, initialized.stderr).toBe(0);
 
-      const ignored = [
-        ...LOCAL_FILES,
-        ...(NODE_TEMPLATES.has(id) ? NODE_OUTPUT : []),
-        ...(id === 'smart-contract' || id === 'full-stack'
-          ? ['target/debug/build.log', 'contracts/hello/target/debug/build.log']
-          : []),
-      ];
+        const ignored = [
+          ...LOCAL_FILES,
+          ...(NODE_TEMPLATES.has(id) ? NODE_OUTPUT : []),
+          ...(id === 'smart-contract' || id === 'full-stack'
+            ? ['target/debug/build.log', 'contracts/hello/target/debug/build.log']
+            : []),
+        ];
 
-      for (const path of ignored) {
-        const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
-        expect(
-          result.status,
-          `${id}: expected ${path} to be ignored: ${result.stderr}`,
-        ).toBe(0);
-      }
+        for (const path of ignored) {
+          const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
+          expect(
+            result.status,
+            `${id}: expected ${path} to be ignored: ${result.stderr}`,
+          ).toBe(0);
+        }
 
-      for (const path of TRACKABLE_FILES) {
-        const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
-        expect(
-          result.status,
-          `${id}: expected ${path} to remain trackable: ${result.stderr}`,
-        ).toBe(1);
-      }
+        for (const path of TRACKABLE_FILES) {
+          const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
+          expect(
+            result.status,
+            `${id}: expected ${path} to remain trackable: ${result.stderr}`,
+          ).toBe(1);
+        }
       }),
   );
 });
