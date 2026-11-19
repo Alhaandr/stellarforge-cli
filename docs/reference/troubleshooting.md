@@ -106,7 +106,7 @@ start
 start:backend
 ```
 
-Selection follows that order.
+Selection follows that order, and a candidate only wins when its value is a non-blank string (blank or whitespace-only values are ignored). If every supported candidate is blank or absent, the failure message explains that and shows how to add one.
 
 If the selected npm process starts and then fails, StellarForge returns subprocess exit category `3`.
 

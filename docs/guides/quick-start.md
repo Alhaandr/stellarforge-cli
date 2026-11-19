@@ -43,7 +43,7 @@ From a supported generated Node.js project:
 stellarforge dev
 ```
 
-StellarForge looks for a supported npm development script: `dev`, then `start`, then `start:backend`.
+StellarForge looks for a supported npm development script: `dev`, then `start`, then `start:backend`. Blank or whitespace-only script values are ignored; a candidate must contain a real command.
 
 If no script is found, see [`dev` troubleshooting](../reference/troubleshooting.md#stellarforge-dev-says-no-supported-script-exists).
 

@@ -67,4 +67,92 @@ describe('development project plan', () => {
         'No supported development script',
       );
     }));
+
+  it('selects a lower-precedence script when an earlier candidate is blank', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({
+          name: 'demo',
+          scripts: { dev: '   ', start: 'node start.js' },
+        }),
+      );
+
+      const [spec] = resolveDevProcessPlan(root);
+
+      const npm = createNpmInvocation(['run', 'start']);
+      expect(spec).toMatchObject({ command: npm.command, args: npm.args });
+    }));
+
+  it('ignores whitespace-only start and start:backend to keep precedence sane', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({
+          name: 'demo',
+          scripts: {
+            dev: '\n\t ',
+            'start:backend': 'node backend.js',
+          },
+        }),
+      );
+
+      const [spec] = resolveDevProcessPlan(root);
+
+      const npm = createNpmInvocation(['run', 'start:backend']);
+      expect(spec).toMatchObject({ command: npm.command, args: npm.args });
+    }));
+
+  it('prefers dev over start over start:backend when all are non-blank', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({
+          name: 'demo',
+          scripts: {
+            dev: 'node dev.js',
+            start: 'node start.js',
+            'start:backend': 'node backend.js',
+          },
+        }),
+      );
+
+      const [spec] = resolveDevProcessPlan(root);
+
+      const npm = createNpmInvocation(['run', 'dev']);
+      expect(spec).toMatchObject({ command: npm.command, args: npm.args });
+    }));
+
+  it('rejects blank and whitespace-only candidate scripts with actionable guidance', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({
+          name: 'demo',
+          scripts: { dev: '', start: '   ', 'start:backend': '\n' },
+        }),
+      );
+
+      expect(() => resolveDevProcessPlan(root)).toThrow(
+        /non-blank value.*dev, start, start:backend.*package\.json/,
+      );
+
+      // And it never reaches a spawn decision: the resolver throws first.
+      expect(() => resolveDevProcessPlan(root)).toThrow(ValidationCliError);
+    }));
+
+  it('ignores non-string scripts instead of accepting them as runnable', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, 'package.json'),
+        JSON.stringify({
+          name: 'demo',
+          scripts: { dev: 42, start: ['node', 'start.js'] },
+        }),
+      );
+
+      expect(() => resolveDevProcessPlan(root)).toThrow(
+        'No supported development script',
+      );
+    }));
 });
