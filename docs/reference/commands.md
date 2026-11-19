@@ -71,6 +71,8 @@ stellarforge new escrow-contract -t smart-contract
 
 Generation validates project names and destinations before writing. Existing non-empty destinations are not overwritten. Templates come only from the bundled template registry; arbitrary URLs, filesystem template paths, or executable template code are not accepted.
 
+Every generated project carries a small provenance marker at `<project>/.stellarforge.json` recording only the generator package, the template identifier, and the generator version. See [Template Generation Safety](template-generation.md#provenance-marker).
+
 See [Template Generation Safety](template-generation.md).
 
 ### Common failures

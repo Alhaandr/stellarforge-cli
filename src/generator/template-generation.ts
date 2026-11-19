@@ -13,13 +13,25 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ValidationCliError } from '../errors/errors.js';
+import { resolveCliVersion } from '../version.js';
 import type { GenerationContext, ProjectGenerationResult } from './types.js';
 
 const SUBSTITUTION_TOKEN = /\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g;
 
 export interface TemplateGenerationOptions {
   readonly templateRoot: string;
+  /**
+   * Overrides the marker's generator version (defaults to the installed CLI
+   * version from package metadata). Generation otherwise stays deterministic.
+   */
+  readonly generatorVersion?: string;
 }
+
+/** Filename of the generated project provenance marker. */
+export const GENERATED_MARKER_FILENAME = '.stellarforge.json';
+
+/** Package identifier recorded in the generated provenance marker. */
+export const GENERATOR_PACKAGE_NAME = '@diginodes/stellarforge-cli';
 
 function isWithin(root: string, candidate: string): boolean {
   const pathFromRoot = relative(root, candidate);
@@ -232,6 +244,20 @@ export function generateProjectFromTemplate(
       projectName: context.input.projectName,
       templateId: context.template.templateId,
     });
+
+    // Provenance marker: record only the template identifier and generator
+    // version — never user, host, path, or environment information. Kept
+    // byte-stable across runs except for the version value itself.
+    const marker = {
+      generator: GENERATOR_PACKAGE_NAME,
+      template: context.template.templateId,
+      version: options.generatorVersion ?? resolveCliVersion(),
+    };
+    writeFileSync(
+      join(stagingRoot, GENERATED_MARKER_FILENAME),
+      `${JSON.stringify(marker, null, 2)}\n`,
+      'utf8',
+    );
 
     if (destinationExisted) {
       rmdirSync(destination);
