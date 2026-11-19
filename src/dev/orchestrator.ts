@@ -8,6 +8,7 @@ import type { DevProcessSpec } from './project.js';
 interface ManagedStream {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
 export interface ManagedChildProcess {
@@ -267,11 +268,30 @@ export async function superviseDevProcesses(
           state.stdoutWriter.end();
           maybeComplete(state);
         });
+        child.stdout.on('error', (error) => {
+          // A failed stream can never emit 'end'; mark it done, flush only
+          // its own final output (redacted, bounded), and fail the supervisor.
+          // Raw stream errors and local paths never reach the terminal.
+          if (!state.stdoutDone) {
+            state.stdoutDone = true;
+            state.stdoutWriter.end();
+          }
+
+          fail(`Development process '${state.label}' stdout stream failed.`, error);
+        });
         child.stderr.on('data', (chunk) => state.stderrWriter.write(chunk));
         child.stderr.on('end', () => {
           state.stderrDone = true;
           state.stderrWriter.end();
           maybeComplete(state);
+        });
+        child.stderr.on('error', (error) => {
+          if (!state.stderrDone) {
+            state.stderrDone = true;
+            state.stderrWriter.end();
+          }
+
+          fail(`Development process '${state.label}' stderr stream failed.`, error);
         });
         child.once('error', (error) => {
           fail(`Development process '${spec.label}' failed to start.`, error);
