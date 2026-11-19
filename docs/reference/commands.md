@@ -4,17 +4,16 @@ This reference documents the implemented StellarForge CLI MVP command surface.
 
 ## Command status
 
-| Command | Purpose | Status |
-| --- | --- | --- |
-| `stellarforge --help` | Show root usage and available commands | Implemented |
-| `stellarforge --version` | Show the installed CLI package version | Implemented |
-| `stellarforge new <project-name>` | Generate a supported StellarForge project | Implemented |
-| `stellarforge doctor` | Validate the local development toolchain | Implemented |
-| `stellarforge dev` | Start a supported generated Node.js project | Implemented |
-| `stellarforge test` | Run a supported project test workflow | Implemented |
-| `stellarforge deploy` | Deploy a supported smart-contract project to Stellar Testnet | Implemented |
-| `stellarforge validate` | Check documented local project requirements | Implemented |
-| `stellarforge add` | Add modules/plugins | Not implemented / post-v1 candidate |
+| Command                           | Purpose                                                      | Status                              |
+| --------------------------------- | ------------------------------------------------------------ | ----------------------------------- |
+| `stellarforge --help`             | Show root usage and available commands                       | Implemented                         |
+| `stellarforge --version`          | Show the installed CLI package version                       | Implemented                         |
+| `stellarforge new <project-name>` | Generate a supported StellarForge project                    | Implemented                         |
+| `stellarforge doctor`             | Validate the local development toolchain                     | Implemented                         |
+| `stellarforge dev`                | Start a supported generated Node.js project                  | Implemented                         |
+| `stellarforge test`               | Run a supported project test workflow                        | Implemented                         |
+| `stellarforge deploy`             | Deploy a supported smart-contract project to Stellar Testnet | Implemented                         |
+| `stellarforge add`                | Add modules/plugins                                          | Not implemented / post-v1 candidate |
 
 See also [Installation](../guides/installation.md), [Quick Start](../guides/quick-start.md), [Configuration](configuration.md), [Exit Codes](exit-codes.md), [Troubleshooting](troubleshooting.md#find-your-problem), [Platform Support](platform-support.md), and the repository [security guidance](../../SECURITY.md).
 
@@ -51,9 +50,10 @@ stellarforge new <project-name> [options]
 
 ### Options
 
-| Option | Meaning |
-| --- | --- |
-| `-t, --template <id>` | Select a bundled template. |
+| Option                | Meaning                                          |
+| --------------------- | ------------------------------------------------ |
+| `-t, --template <id>` | Select a bundled template.                       |
+| `--dry-run`           | Preview files and substitutions without writing. |
 
 Supported template IDs are:
 
@@ -68,11 +68,12 @@ Supported template IDs are:
 stellarforge new my-app
 stellarforge new payments-api --template api-service
 stellarforge new escrow-contract -t smart-contract
+stellarforge new preview-app --template basic-app --dry-run
 ```
 
 Generation validates project names and destinations before writing. Existing non-empty destinations are not overwritten. Templates come only from the bundled template registry; arbitrary URLs, filesystem template paths, or executable template code are not accepted.
 
-Every generated project carries a small provenance marker at `<project>/.stellarforge.json` recording only the generator package, the template identifier, and the generator version. See [Template Generation Safety](template-generation.md#provenance-marker).
+`--dry-run` performs the same name, destination, template, and template-content validation as generation, then prints the resolved destination, files to add, and substitutions. It does not create or modify any files and works in non-interactive terminals.
 
 See [Template Generation Safety](template-generation.md).
 
@@ -161,8 +162,10 @@ stellarforge test
 
 Supported project forms are:
 
-- Node.js project with a `package.json` `test` script → `npm run test`;
+- Node.js project with a `package.json` `test` script (non-empty) → `npm run test`;
 - Cargo workspace/project with `Cargo.toml` → `cargo test`.
+
+A string-valued but empty or whitespace-only `scripts.test` is rejected with exit `2` before any subprocess is spawned, because npm treats an empty test script as a successful no-op and would report success without running any tests.
 
 When both are present, the Node.js project test workflow is selected first.
 
@@ -210,9 +213,9 @@ stellarforge deploy --source release-deployer
 
 ### Options
 
-| Option | Meaning |
-| --- | --- |
-| `--network <network>` | Explicit deployment network. CLI value overrides project configuration. |
+| Option                | Meaning                                                                      |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `--network <network>` | Explicit deployment network. CLI value overrides project configuration.      |
 | `--source <identity>` | Named Stellar CLI identity alias. CLI value overrides project configuration. |
 
 The effective network and identity must both be present after configuration resolution.
@@ -229,11 +232,16 @@ stellar contract deploy --source-account deployer --network testnet
 
 No shell interpolation is used. Signing material remains under Stellar CLI identity management.
 
+Deployment output is validated against the official Stellar contract identifier format (`C...`, 56 characters Base32). Malformed, truncated, missing, or multiple conflicting contract IDs cannot be mistaken for deployment success.
+
+The local Stellar CLI process has a 10-minute timeout. On timeout, StellarForge sends a termination signal, waits up to 5 seconds, then force-terminates the local process tree and waits up to another 5 seconds for cleanup. A timeout does not confirm whether Testnet accepted the transaction; verify the result manually before deciding whether to submit again. StellarForge never automatically retries a deployment.
+
 ### Exit behavior
 
 - `0` — deployment subprocess completes successfully;
 - `2` — configuration, project layout, network, or identity input is invalid;
 - `3` — Stellar CLI fails to start or returns a failure.
+- `3` — the local deployment process times out; the remote submission outcome may be uncertain.
 
 See [Configuration](configuration.md) and the deployment sections of [Troubleshooting](troubleshooting.md#deployment-network-is-required): [network required](troubleshooting.md#deployment-network-is-required), [Mainnet or Futurenet rejection](troubleshooting.md#deployment-rejects-mainnet-or-futurenet), [identity rejected](troubleshooting.md#deployment-identity-is-rejected), and [Stellar CLI deployment fails](troubleshooting.md#stellar-cli-deployment-fails).
 
