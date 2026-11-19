@@ -68,9 +68,19 @@ class FakeChild implements ManagedChildProcess {
   }
 
   emitExit(code: number | null, signal: NodeJS.Signals | null): void {
-    // End both stdio streams so the supervisor observes the full lifecycle.
+    // End both stdio streams so the supervisor, which settles once they close,
+    // observes the same lifecycle a real child produces.
     this.stdout.end();
     this.stderr.end();
+    this.#exitListener?.(code, signal);
+  }
+
+  // Exit can be observed before stdio has delivered its final bytes; keep the
+  // streams open so tests can deliver the remainder afterwards.
+  emitExitKeepingStreamsOpen(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
     this.#exitListener?.(code, signal);
   }
 }
@@ -536,7 +546,7 @@ describe('dev supervisor stdio completion (#206)', () => {
     child.stdout.write('secret: sk_li');
 
     // Node may emit exit before stdio has delivered the rest.
-    child.emitExit(1, null);
+    child.emitExitKeepingStreamsOpen(1, null);
 
     // The pending half must NOT reach the terminal at exit time.
     await Promise.resolve();
@@ -565,7 +575,7 @@ describe('dev supervisor stdio completion (#206)', () => {
     });
 
     child.stdout.write('secret: sk_li');
-    child.emitExit(0, null);
+    child.emitExitKeepingStreamsOpen(0, null);
 
     child.stdout.write('ve_ABCDEF0123456789\n');
     child.stdout.end();
