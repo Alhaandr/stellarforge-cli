@@ -68,6 +68,9 @@ class FakeChild implements ManagedChildProcess {
   }
 
   emitExit(code: number | null, signal: NodeJS.Signals | null): void {
+    // End both stdio streams so the supervisor observes the full lifecycle.
+    this.stdout.end();
+    this.stderr.end();
     this.#exitListener?.(code, signal);
   }
 }
@@ -515,5 +518,143 @@ describe('dev supervisor UTF-8 chunk decoding (#205)', () => {
 
     child.emitExit(0, null);
     await running;
+  });
+});
+describe('dev supervisor stdio completion (#206)', () => {
+  it('does not flush a pending sensitive assignment at process exit', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+    running.catch(() => undefined);
+
+    // The first half of a sensitive assignment is pending a newline.
+    child.stdout.write('secret: sk_li');
+
+    // Node may emit exit before stdio has delivered the rest.
+    child.emitExit(1, null);
+
+    // The pending half must NOT reach the terminal at exit time.
+    await Promise.resolve();
+    expect(captured.stdoutText()).toBe('');
+
+    // The rest arrives after exit, still through the same stream.
+    child.stdout.write('ve_ABCDEF0123456789\n');
+    child.stdout.end();
+    child.stderr.end();
+
+    await expect(running).rejects.toThrow(/exited unexpectedly/);
+
+    const emitted = captured.stdoutText();
+    expect(emitted).not.toContain('sk_li');
+    expect(emitted).toContain('secret: [REDACTED]');
+  });
+
+  it('redacts a sensitive assignment split across the exit boundary as one line', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('secret: sk_li');
+    child.emitExit(0, null);
+
+    child.stdout.write('ve_ABCDEF0123456789\n');
+    child.stdout.end();
+    child.stderr.end();
+
+    await running;
+
+    const emitted = captured.stdoutText();
+    expect(emitted).not.toContain('sk_li');
+    expect(emitted).toContain('secret: [REDACTED]');
+  });
+
+  it('emits a final partial line exactly once after stdio completes', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // No trailing newline: emitted exactly once, on stream end.
+    child.stdout.write('done');
+    child.emitExit(0, null);
+    child.stdout.end();
+    child.stderr.end();
+
+    await running;
+
+    const occurrences = captured.stdoutText().split('[api] done').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('settles once exit is observed after both streams end (end-before-exit)', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.end();
+    child.stderr.end();
+    child.emitExit(0, null);
+
+    await running;
+  });
+
+  it('settles once both streams end after exit is observed (exit-before-end)', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.emitExit(0, null);
+    child.stdout.end();
+    child.stderr.end();
+
+    await running;
+  });
+
+  it('waits for both stdio streams, not just one', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+    let settled = false;
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+    running.then(() => {
+      settled = true;
+    });
+
+    child.stdout.end();
+    child.emitExit(0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.stderr.end();
+    await running;
+    expect(settled).toBe(true);
   });
 });

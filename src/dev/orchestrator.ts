@@ -8,7 +8,6 @@ import type { DevProcessSpec } from './project.js';
 interface ManagedStream {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
-  on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
 export interface ManagedChildProcess {
@@ -173,12 +172,27 @@ export async function superviseDevProcesses(
       let remaining = specs.length;
       let settled = false;
 
+      interface ChildState {
+        label: string;
+        stdoutWriter: PrefixedLineWriter;
+        stderrWriter: PrefixedLineWriter;
+        stdoutDone: boolean;
+        stderrDone: boolean;
+        exited: boolean;
+        exitCode: number | null;
+        exitSignal: NodeJS.Signals | null;
+        completed: boolean;
+      }
+
       const fail = (message: string, cause?: Error): void => {
         if (settled) {
           return;
         }
 
         settled = true;
+        // Signal siblings for cleanup but leave still-open streams alone: a
+        // later flush there could emit half of a sensitive assignment. Any
+        // pending line stays bounded in the writer until its stream ends.
         stopChildren('SIGTERM');
         reject(
           new SubprocessCliError(
@@ -186,6 +200,39 @@ export async function superviseDevProcesses(
             cause === undefined ? undefined : { cause },
           ),
         );
+      };
+
+      // Exit and stdio completion are separate events: a child only settles
+      // once its exit has been observed AND every stream has ended. Flushing
+      // before that could split a sensitive assignment across the flush
+      // boundary and defeat line-based redaction.
+      const maybeComplete = (state: ChildState): void => {
+        if (
+          settled ||
+          state.completed ||
+          !state.exited ||
+          !state.stdoutDone ||
+          !state.stderrDone
+        ) {
+          return;
+        }
+
+        state.completed = true;
+        remaining -= 1;
+
+        if (!shuttingDown && state.exitCode !== 0) {
+          fail(
+            `Development process '${state.label}' exited unexpectedly${
+              state.exitCode === null ? '' : ` with code ${state.exitCode}`
+            }${state.exitSignal === null ? '' : ` after ${state.exitSignal}`}.`,
+          );
+          return;
+        }
+
+        if (remaining === 0) {
+          settled = true;
+          resolve();
+        }
       };
 
       for (const spec of specs) {
@@ -202,41 +249,38 @@ export async function superviseDevProcesses(
         }
 
         children.push(child);
-        const stdoutWriter = createPrefixedLineWriter(
-          output,
-          spec.label,
-          false,
-        );
-        const stderrWriter = createPrefixedLineWriter(output, spec.label, true);
-        const flushOutput = (): void => {
-          stdoutWriter.end();
-          stderrWriter.end();
+        const state: ChildState = {
+          label: spec.label,
+          stdoutWriter: createPrefixedLineWriter(output, spec.label, false),
+          stderrWriter: createPrefixedLineWriter(output, spec.label, true),
+          stdoutDone: false,
+          stderrDone: false,
+          exited: false,
+          exitCode: null,
+          exitSignal: null,
+          completed: false,
         };
-        child.stdout.on('data', (chunk) => stdoutWriter.write(chunk));
-        child.stdout.on('end', () => stdoutWriter.end());
-        child.stderr.on('data', (chunk) => stderrWriter.write(chunk));
-        child.stderr.on('end', () => stderrWriter.end());
+
+        child.stdout.on('data', (chunk) => state.stdoutWriter.write(chunk));
+        child.stdout.on('end', () => {
+          state.stdoutDone = true;
+          state.stdoutWriter.end();
+          maybeComplete(state);
+        });
+        child.stderr.on('data', (chunk) => state.stderrWriter.write(chunk));
+        child.stderr.on('end', () => {
+          state.stderrDone = true;
+          state.stderrWriter.end();
+          maybeComplete(state);
+        });
         child.once('error', (error) => {
-          flushOutput();
           fail(`Development process '${spec.label}' failed to start.`, error);
         });
         child.once('exit', (code, signal) => {
-          flushOutput();
-          remaining -= 1;
-
-          if (!shuttingDown && code !== 0) {
-            fail(
-              `Development process '${spec.label}' exited unexpectedly${
-                code === null ? '' : ` with code ${code}`
-              }${signal === null ? '' : ` after ${signal}`}.`,
-            );
-            return;
-          }
-
-          if (!settled && remaining === 0) {
-            settled = true;
-            resolve();
-          }
+          state.exited = true;
+          state.exitCode = code;
+          state.exitSignal = signal;
+          maybeComplete(state);
         });
       }
     });
