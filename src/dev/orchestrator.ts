@@ -8,6 +8,7 @@ import type { DevProcessSpec } from './project.js';
 interface ManagedStream {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
 }
 
 export interface ManagedChildProcess {
@@ -54,12 +55,14 @@ const MAX_BUFFERED_LINE_LENGTH = 64 * 1024;
 
 interface PrefixedLineWriter {
   write(chunk: Buffer | string): void;
-  flush(): void;
+  end(): void;
 }
 
 // Child output is untrusted: buffer partial lines so secret-like values split
 // across chunks are still redacted as a whole before reaching the terminal.
-// Bare carriage returns are treated as line boundaries (progress-frame
+// Each stream uses its own streaming UTF-8 decoder, so a multi-byte character
+// split between chunks is reconstructed instead of being replaced with
+// U+FFFD. Bare carriage returns are treated as line boundaries (progress-frame
 // separators): every frame is emitted as its own complete line, never as a
 // raw CR, so progress updates cannot overwrite terminal content already on
 // screen. A CR-terminated frame with no text creates no line at all.
@@ -69,6 +72,8 @@ function createPrefixedLineWriter(
   isError: boolean,
 ): PrefixedLineWriter {
   let pending = '';
+  let ended = false;
+  const decoder = new TextDecoder('utf-8');
 
   const emit = (line: string): void => {
     if (line.length === 0) {
@@ -83,21 +88,46 @@ function createPrefixedLineWriter(
     }
   };
 
+  // Splits decoded text into complete lines, keeping the trailing partial
+  // line in the pending buffer. Redaction stays line-based, which is only
+  // sound while no line reaches the terminal before its final byte arrives.
+  const feed = (text: string): void => {
+    const lines = `${pending}${text}`.split(/\r?\n|\r/);
+    pending = lines.pop() ?? '';
+
+    for (const line of lines) {
+      emit(line);
+    }
+
+    if (pending.length > MAX_BUFFERED_LINE_LENGTH) {
+      emit(pending);
+      pending = '';
+    }
+  };
+
   return {
     write(chunk) {
-      const lines = `${pending}${String(chunk)}`.split(/\r?\n|\r/);
-      pending = lines.pop() ?? '';
-
-      for (const line of lines) {
-        emit(line);
+      if (ended) {
+        return;
       }
 
-      if (pending.length > MAX_BUFFERED_LINE_LENGTH) {
-        emit(pending);
-        pending = '';
-      }
+      // String chunks are passed through untouched for tests; byte chunks
+      // stream through the decoder, holding incomplete trailing sequences.
+      feed(typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true }));
     },
-    flush() {
+    end() {
+      if (ended) {
+        return;
+      }
+
+      ended = true;
+      // Flush any held bytes (complete the final code point or emit U+FFFD
+      // for a truncated one), then emit the final partial line exactly once.
+      const tail = decoder.decode();
+      if (tail.length > 0) {
+        feed(tail);
+      }
+
       emit(pending);
       pending = '';
     },
@@ -179,13 +209,13 @@ export async function superviseDevProcesses(
         );
         const stderrWriter = createPrefixedLineWriter(output, spec.label, true);
         const flushOutput = (): void => {
-          stdoutWriter.flush();
-          stderrWriter.flush();
+          stdoutWriter.end();
+          stderrWriter.end();
         };
         child.stdout.on('data', (chunk) => stdoutWriter.write(chunk));
-        child.stdout.on('end', () => stdoutWriter.flush());
+        child.stdout.on('end', () => stdoutWriter.end());
         child.stderr.on('data', (chunk) => stderrWriter.write(chunk));
-        child.stderr.on('end', () => stderrWriter.flush());
+        child.stderr.on('end', () => stderrWriter.end());
         child.once('error', (error) => {
           flushOutput();
           fail(`Development process '${spec.label}' failed to start.`, error);

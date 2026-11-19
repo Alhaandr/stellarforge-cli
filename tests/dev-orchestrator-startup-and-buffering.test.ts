@@ -5,12 +5,12 @@
  * only whole lines (`child.stdout.write('ready\n')`) and never asserts the order
  * in which children are spawned, so both regressions could land unnoticed:
  *
- *   - #158 — if the spawn loop were ever reordered or parallelised, children
+ *   - #158 â€” if the spawn loop were ever reordered or parallelised, children
  *     would start in an unstable order. `superviseDevProcesses` walks `specs`
  *     in order and spawns each before registering its listeners, so the order is
  *     a real contract: a later spec may depend on an earlier one being up.
  *
- *   - #159 — `createPrefixedLineWriter` buffers a partial trailing line so a
+ *   - #159 â€” `createPrefixedLineWriter` buffers a partial trailing line so a
  *     secret-like value split across chunks is redacted as a whole. A regression
  *     that emitted each chunk immediately would leak the tail of a split secret
  *     straight to the terminal, which is the failure the buffering exists to
@@ -198,7 +198,7 @@ describe('dev supervisor partial-line buffering (#159)', () => {
     });
 
     // Split mid-label so that neither chunk alone is recognisable as a
-    // credential assignment — only the reassembled line is.
+    // credential assignment â€” only the reassembled line is.
     child.stdout.write('api_tok');
     child.stdout.write('en=sk_live_ABCDEF0123456789\n');
 
@@ -281,7 +281,7 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
     await Promise.resolve();
 
     const emitted = captured.stdoutText();
-    // Both frames are visible as their own lines — nothing was overwritten,
+    // Both frames are visible as their own lines â€” nothing was overwritten,
     // and no raw CR reached the terminal.
     expect(emitted).toContain('[api] building 10%\n');
     expect(emitted).toContain('[api] building 20%\n');
@@ -387,6 +387,126 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
 
     child.stdout.write('api_tok');
     child.stdout.write('en=sk_live_ABCDEF0123456789\r');
+    await Promise.resolve();
+
+    const emitted = captured.stdoutText();
+    expect(emitted).not.toContain('sk_live_ABCDEF0123456789');
+    expect(emitted).toContain('api_token=[REDACTED]');
+
+    child.emitExit(0, null);
+    await running;
+  });
+});
+
+describe('dev supervisor UTF-8 chunk decoding (#205)', () => {
+  it('reconstructs a multi-byte character split across byte chunks', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // U+20AC (EURO SIGN) is e2 82 ac in UTF-8; split between the second and third bytes.
+    child.stdout.write(Buffer.from([0xe2, 0x82]));
+    child.stdout.write(Buffer.from([0xac, 0x0a]));
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toContain('[api] €\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('reconstructs a 4-byte code point split across chunks', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // U+1F600 (GRINNING FACE): f0 9f 98 80 — split after the first two bytes.
+    child.stdout.write(Buffer.from([0xf0, 0x9f]));
+    child.stdout.write(Buffer.from([0x98, 0x80]));
+    child.stdout.write(' fine\n');
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toContain('[api] 😀 fine\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('keeps decoder state independent across stdout and stderr', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // Hold an incomplete EURO SIGN on stdout while stderr completes a full line.
+    child.stdout.write(Buffer.from([0xe2, 0x82]));
+    child.stderr.write('ready\n');
+    await Promise.resolve();
+
+    expect(captured.stderrText()).toContain('[api] ready\n');
+    expect(captured.stdoutText()).not.toContain('ready');
+
+    child.stdout.write(Buffer.from([0xac, 0x0a]));
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toContain('[api] €\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('emits U+FFFD for a truncated code point at stream end without throwing', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // The held bytes cannot be completed; the stream end flushes them as U+FFFD.
+    child.stdout.write(Buffer.from([0xe2, 0x82]));
+    const ended = new Promise<void>((resolve) => child.stdout.once('end', resolve));
+    child.stdout.end();
+    await ended;
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toContain('[api] �\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('still redacts a secret split across a multi-byte character boundary', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // A complete assignment whose multi-byte é is split across chunks: redaction only
+    // works when the line is reassembled before it reaches the terminal.
+    const line = Buffer.from('note=café; api_token=sk_live_ABCDEF0123456789\n', 'utf8');
+    child.stdout.write(line.subarray(0, 9)); // cuts inside the multi-byte é
+    child.stdout.write(line.subarray(9));
     await Promise.resolve();
 
     const emitted = captured.stdoutText();
