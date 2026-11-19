@@ -5,12 +5,17 @@ import {
   type ResolvedProjectConfig,
 } from '../config/project.js';
 import {
+  defaultSpawnProcess,
   superviseDevProcesses,
   type DevOrchestratorOptions,
+  type DevProcessSpawner,
 } from '../dev/orchestrator.js';
 import type { DevProcessSpec } from '../dev/project.js';
 import {
   resolveTestnetDeploymentPlan,
+  validateDeploymentOutput,
+  type DeployedContractData,
+  type DeploymentOutput,
   type TestnetDeploymentInput,
 } from '../deployment/project.js';
 import { ValidationCliError } from '../errors/errors.js';
@@ -25,6 +30,8 @@ export interface DeployCommandOptions extends DevOrchestratorOptions {
   readonly resolvePlan?: (
     input: TestnetDeploymentInput,
   ) => readonly DevProcessSpec[];
+  readonly validateDeployment?:
+    boolean | ((output: DeploymentOutput) => DeployedContractData);
 }
 
 interface DeployCommandFlags {
@@ -40,6 +47,7 @@ export function createDeployCommand(
     output = new TerminalOutput(),
     resolveConfig = resolveProjectConfig,
     resolvePlan = resolveTestnetDeploymentPlan,
+    validateDeployment,
   } = options;
 
   return new Command('deploy')
@@ -84,9 +92,47 @@ export function createDeployCommand(
 
       output.info('Deploying smart contract to Stellar Testnet.');
 
+      let capturedStdout = '';
+      let capturedStderr = '';
+      let childExitCode: number | null = 0;
+
+      let effectiveSpawnProcess: DevProcessSpawner | undefined =
+        options.spawnProcess;
+      if (validateDeployment) {
+        const baseSpawner = options.spawnProcess ?? defaultSpawnProcess;
+        effectiveSpawnProcess = (spec, env) => {
+          const child = baseSpawner(spec, env);
+          child.stdout.on('data', (chunk) => {
+            capturedStdout += String(chunk);
+          });
+          child.stderr.on('data', (chunk) => {
+            capturedStderr += String(chunk);
+          });
+          child.once('exit', (code) => {
+            childExitCode = code;
+          });
+          return child;
+        };
+      }
+
       await superviseDevProcesses(plan, {
         ...options,
         output,
+        ...(effectiveSpawnProcess === undefined
+          ? {}
+          : { spawnProcess: effectiveSpawnProcess }),
       });
+
+      if (validateDeployment) {
+        const validator =
+          typeof validateDeployment === 'function'
+            ? validateDeployment
+            : validateDeploymentOutput;
+        validator({
+          stdout: capturedStdout,
+          stderr: capturedStderr,
+          exitCode: childExitCode,
+        });
+      }
     });
 }
