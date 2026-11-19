@@ -362,7 +362,7 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
     });
 
     // No terminator at all: the pending buffer drains via the bound instead of
-    // growing without limit.
+    // growing without limit. Line output is capped at 8 KiB by redaction.
     child.stdout.write('y'.repeat(70 * 1024));
     await Promise.resolve();
     // NOTE: redactSecretLikeText currently truncates each line to the first
@@ -383,6 +383,8 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
       signalSource: new FakeSignalSource(),
     });
 
+    // A CR-terminated frame is emitted as its own complete line; line output
+    // is capped at 8 KiB by redaction.
     child.stdout.write('x'.repeat(70 * 1024) + '\r');
     await Promise.resolve();
     // NOTE: redactSecretLikeText currently truncates each line to the first
