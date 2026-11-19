@@ -116,7 +116,7 @@ See the [`dev` command reference](commands.md#stellarforge-dev).
 
 A supported test project must have either:
 
-- `package.json` with a string `scripts.test` entry; or
+- `package.json` with a non-empty string `scripts.test` entry; or
 - `Cargo.toml`.
 
 Node.js projects are run through `npm run test`; Cargo projects are run through `cargo test`.
