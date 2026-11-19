@@ -158,8 +158,10 @@ stellarforge test
 
 Supported project forms are:
 
-- Node.js project with a `package.json` `test` script → `npm run test`;
+- Node.js project with a `package.json` `test` script (non-empty) → `npm run test`;
 - Cargo workspace/project with `Cargo.toml` → `cargo test`.
+
+A string-valued but empty or whitespace-only `scripts.test` is rejected with exit `2` before any subprocess is spawned, because npm treats an empty test script as a successful no-op and would report success without running any tests.
 
 When both are present, the Node.js project test workflow is selected first.
 

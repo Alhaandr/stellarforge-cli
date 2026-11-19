@@ -10,6 +10,276 @@ import {
 export const PROJECT_CONFIG_FILENAME = 'stellarforge.config.json';
 const MAX_CONFIG_BYTES = 64 * 1024;
 
+/**
+ * Best-effort JSON scanner that rejects duplicate object keys, including
+ * escaped-equivalent spellings of the same key and duplicates at any depth.
+ *
+ * The scanner is intentionally fail-open: on any anomaly (unterminated
+ * strings, stray tokens, trailing garbage) it stops checking and lets the
+ * caller fall through to JSON.parse, which produces the stable, content-free
+ * malformed-JSON error. The scanner never echoes values — only the offending
+ * key name is reported, JSON-quoted so it cannot inject terminal control
+ * sequences.
+ */
+class ScanAbort extends Error {}
+
+function abort(): never {
+  throw new ScanAbort('duplicate-key scan aborted');
+}
+
+function isWhitespace(char: string | undefined): boolean {
+  return (
+    char === ' ' || char === '\t' || char === '\n' || char === '\r'
+  );
+}
+
+function skipWhitespace(raw: string, index: number): number {
+  let position = index;
+  while (position < raw.length && isWhitespace(raw[position])) {
+    position += 1;
+  }
+  return position;
+}
+
+function decodeJsonString(
+  raw: string,
+  index: number,
+): { text: string; end: number } {
+  if (raw[index] !== '"') {
+    abort();
+  }
+
+  const chars: string[] = [];
+  let position = index + 1;
+
+  while (position < raw.length) {
+    const char = raw[position];
+
+    if (char === '"') {
+      return { text: chars.join(''), end: position + 1 };
+    }
+
+    if (char === '\\') {
+      const escape = raw[position + 1];
+
+      switch (escape) {
+        case '"':
+          chars.push('"');
+          position += 2;
+          break;
+        case '\\':
+          chars.push('\\');
+          position += 2;
+          break;
+        case '/':
+          chars.push('/');
+          position += 2;
+          break;
+        case 'b':
+          chars.push('\b');
+          position += 2;
+          break;
+        case 'f':
+          chars.push('\f');
+          position += 2;
+          break;
+        case 'n':
+          chars.push('\n');
+          position += 2;
+          break;
+        case 'r':
+          chars.push('\r');
+          position += 2;
+          break;
+        case 't':
+          chars.push('\t');
+          position += 2;
+          break;
+        case 'u': {
+          const hex = raw.slice(position + 2, position + 6);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
+            abort();
+          }
+
+          const code = Number.parseInt(hex, 16);
+
+          if (code >= 0xd800 && code <= 0xdbff) {
+            const pairHex = raw.slice(position + 6, position + 12);
+            const pairMatch = /^\\u([0-9a-fA-F]{4})$/.exec(pairHex);
+            if (!pairMatch || pairMatch[1] === undefined) {
+              abort();
+            }
+
+            const low = Number.parseInt(pairMatch[1], 16);
+            if (low < 0xdc00 || low > 0xdfff) {
+              abort();
+            }
+
+            chars.push(
+              String.fromCodePoint(
+                0x10000 + ((code - 0xd800) << 10 | (low - 0xdc00)),
+              ),
+            );
+            position += 12;
+          } else {
+            chars.push(String.fromCodePoint(code));
+            position += 6;
+          }
+          break;
+        }
+        default:
+          abort();
+      }
+      continue;
+    }
+
+    if (char === undefined) {
+      abort();
+    }
+
+    chars.push(char);
+    position += 1;
+  }
+
+  abort();
+}
+
+const JSON_NUMBER_PREFIX = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/;
+
+function scanValue(raw: string, index: number): number {
+  const position = skipWhitespace(raw, index);
+
+  if (position >= raw.length) {
+    abort();
+  }
+
+  const char = raw[position];
+
+  if (char === '{') {
+    return scanObject(raw, position);
+  }
+
+  if (char === '[') {
+    return scanArray(raw, position);
+  }
+
+  if (char === '"') {
+    return decodeJsonString(raw, position).end;
+  }
+
+  if (raw.startsWith('true', position)) {
+    return position + 4;
+  }
+
+  if (raw.startsWith('false', position)) {
+    return position + 5;
+  }
+
+  if (raw.startsWith('null', position)) {
+    return position + 4;
+  }
+
+  const match = JSON_NUMBER_PREFIX.exec(raw.slice(position));
+  if (match && match[0].length > 0) {
+    return position + match[0].length;
+  }
+
+  abort();
+}
+
+function presentKeyMessage(key: string): string {
+  const display =
+    key.length <= 64 ? JSON.stringify(key) : `${JSON.stringify(key.slice(0, 64))}...`;
+  return `stellarforge.config.json contains a duplicate key ${display}.`;
+}
+
+function scanObject(raw: string, index: number): number {
+  let position = skipWhitespace(raw, index + 1);
+
+  if (raw[position] === '}') {
+    return position + 1;
+  }
+
+  const keys = new Set<string>();
+
+  while (true) {
+    position = skipWhitespace(raw, position);
+
+    const decoded = decodeJsonString(raw, position);
+
+    if (keys.has(decoded.text)) {
+      throw new ValidationCliError(presentKeyMessage(decoded.text));
+    }
+
+    keys.add(decoded.text);
+
+    position = skipWhitespace(raw, decoded.end);
+
+    if (raw[position] !== ':') {
+      abort();
+    }
+
+    position = scanValue(raw, position + 1);
+    position = skipWhitespace(raw, position);
+
+    if (raw[position] === ',') {
+      position += 1;
+      continue;
+    }
+
+    if (raw[position] === '}') {
+      return position + 1;
+    }
+
+    abort();
+  }
+}
+
+function scanArray(raw: string, index: number): number {
+  let position = skipWhitespace(raw, index + 1);
+
+  if (raw[position] === ']') {
+    return position + 1;
+  }
+
+  while (true) {
+    position = scanValue(raw, position);
+    position = skipWhitespace(raw, position);
+
+    if (raw[position] === ',') {
+      position += 1;
+      continue;
+    }
+
+    if (raw[position] === ']') {
+      return position + 1;
+    }
+
+    abort();
+  }
+}
+
+/**
+ * Rejects duplicate object keys in raw config text before parsing. Returns
+ * silently when the document is itself malformed (the caller lets JSON.parse
+ * report that with the stable malformed-JSON error).
+ */
+function assertNoDuplicateJsonKeys(raw: string): void {
+  try {
+    const end = scanValue(raw, 0);
+
+    if (skipWhitespace(raw, end) !== raw.length) {
+      abort();
+    }
+  } catch (error) {
+    if (error instanceof ValidationCliError) {
+      throw error;
+    }
+
+    // Malformed or unsupported document shape: defer to JSON.parse.
+  }
+}
+
 export interface ProjectConfigOverrides {
   readonly network?: string;
   readonly identity?: string;
@@ -56,9 +326,22 @@ export function loadProjectConfig(cwd: string): StellarForgeConfig | undefined {
     );
   }
 
+  let text: string;
+
+  try {
+    text = readFileSync(configPath, 'utf8');
+  } catch (error) {
+    throw new ValidationCliError(
+      'Unable to inspect stellarforge.config.json.',
+      { cause: error },
+    );
+  }
+
+  assertNoDuplicateJsonKeys(text);
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+    parsed = JSON.parse(text) as unknown;
   } catch (error) {
     throw new ValidationCliError(
       'stellarforge.config.json is not valid JSON.',

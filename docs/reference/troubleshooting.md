@@ -116,7 +116,7 @@ See the [`dev` command reference](commands.md#stellarforge-dev).
 
 A supported test project must have either:
 
-- `package.json` with a string `scripts.test` entry; or
+- `package.json` with a non-empty string `scripts.test` entry; or
 - `Cargo.toml`.
 
 Node.js projects are run through `npm run test`; Cargo projects are run through `cargo test`.
@@ -135,7 +135,7 @@ stellarforge.config.json
 
 and live at the project root.
 
-It must be a regular non-symlink file, no larger than 64 KiB, and contain valid JSON with schema version `1`.
+It must be a regular non-symlink file, no larger than 64 KiB, and contain valid JSON with schema version `1`, and it must not contain duplicate object keys at any nesting level (escaped-equivalent spellings are treated as the same key).
 
 Supported fields are only:
 

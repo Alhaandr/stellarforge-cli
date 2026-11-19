@@ -105,3 +105,119 @@ describe('configuration malformed-JSON handling', () => {
       });
     }));
 });
+
+describe('configuration duplicate-key rejection (SW-216)', () => {
+  it.each([
+    ['version', '{"version": 1, "version": 1, "network": "testnet"}'],
+    [
+      'network',
+      '{"version": 1, "network": "testnet", "identity": "deployer", "network": "futurenet"}',
+    ],
+    [
+      'identity',
+      '{"version": 1, "identity": "deployer", "deployer2": "x", "identity": "other"}',
+    ],
+  ] as const)('rejects a duplicate top-level %s key', (_key, content) =>
+    withTempDirectory((root) => {
+      writeFileSync(join(root, PROJECT_CONFIG_FILENAME), content);
+
+      expect(() => loadProjectConfig(root)).toThrow(/duplicate key/);
+      expect(() => loadProjectConfig(root)).toThrow(ValidationCliError);
+    }));
+
+  it('rejects duplicates even when both values are identical', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        '{"version": 1, "version": 1, "network": "testnet"}',
+      );
+
+      expect(() => loadProjectConfig(root)).toThrow('duplicate key "version"');
+    }));
+
+  it('rejects escape-equivalent duplicate keys', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        '{"version": 1, "network": "testnet", "networ\\u006b": "mainnet"}',
+      );
+
+      expect(() => loadProjectConfig(root)).toThrow('duplicate key "network"');
+    }));
+
+  it('rejects duplicate keys at deeper nesting levels', () =>
+    withTempDirectory((root) => {
+      const docs = [
+        '{"version": 1, "extra": {"a": 1, "a": 2}}',
+        '{"version": 1, "extra": [{"a": 1, "a": 2}]}',
+        '{"version": 1, "a": {"b": {"c": 1}, "b": {"d": 2}}}',
+      ];
+
+      for (const content of docs) {
+        writeFileSync(join(root, PROJECT_CONFIG_FILENAME), content);
+
+        expect(() => loadProjectConfig(root)).toThrow('duplicate key');
+        expect(() => loadProjectConfig(root)).toThrow(ValidationCliError);
+      }
+    }));
+
+  it('identifies the duplicate key without echoing any value', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        '{"version": 1, "password": "SENTINEL-DUP-VALUE-xyz-123", "password": "testnet", "network": "testnet"}',
+      );
+
+      expect(() => loadProjectConfig(root)).toThrow('duplicate key "password"');
+      expect(() => loadProjectConfig(root)).toThrow(ValidationCliError);
+
+      try {
+        loadProjectConfig(root);
+        throw new Error('expected duplicate key error');
+      } catch (error) {
+        expect((error as Error).message).not.toContain('SENTINEL-DUP-VALUE');
+      }
+    }));
+
+  it('stops at the first duplicate error regardless of document ordering', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        '{"b": 1, "a": 1, "a": 2, "b": 2}',
+      );
+
+      expect(() => loadProjectConfig(root)).toThrow('duplicate key "a"');
+    }));
+
+  it('bounds the duplicate-key message for pathological keys', () =>
+    withTempDirectory((root) => {
+      const key = 'k'.repeat(500);
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        `{"version": 1, "${key}": 1, "${key}": 2}`,
+      );
+
+      expect(() => loadProjectConfig(root)).toThrow('duplicate key');
+
+      try {
+        loadProjectConfig(root);
+        throw new Error('expected duplicate key error');
+      } catch (error) {
+        expect((error as Error).message.length).toBeLessThan(200);
+      }
+    }));
+
+  it('still loads a valid configuration file after the duplicate-key rule was added', () =>
+    withTempDirectory((root) => {
+      writeFileSync(
+        join(root, PROJECT_CONFIG_FILENAME),
+        JSON.stringify({ version: 1, network: 'testnet', identity: 'deployer' }),
+      );
+
+      expect(loadProjectConfig(root)).toEqual({
+        version: 1,
+        network: 'testnet',
+        identity: 'deployer',
+      });
+    }));
+});
