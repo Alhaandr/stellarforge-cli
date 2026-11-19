@@ -264,3 +264,136 @@ describe('dev supervisor partial-line buffering (#159)', () => {
     await running;
   });
 });
+
+describe('dev supervisor bare CR progress frames (#392)', () => {
+  it('treats a bare CR as a line boundary and emits each progress frame', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('building 10%\r');
+    child.stdout.write('building 20%\r');
+    await Promise.resolve();
+
+    const emitted = captured.stdoutText();
+    // Both frames are visible as their own lines — nothing was overwritten,
+    // and no raw CR reached the terminal.
+    expect(emitted).toContain('[api] building 10%\n');
+    expect(emitted).toContain('[api] building 20%\n');
+    expect(emitted).not.toContain('\r');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('handles LF, CRLF and bare CR deterministically in one stream', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('one\rtwo\nthree\r\nfour\r');
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toBe(
+      '[api] one\n[api] two\n[api] three\n[api] four\n',
+    );
+
+    child.stdout.write('five\n');
+    await Promise.resolve();
+    expect(captured.stdoutText()).toBe(
+      '[api] one\n[api] two\n[api] three\n[api] four\n[api] five\n',
+    );
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('drops empty CR frames without printing blank lines', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('loading\r\r\rdone\r');
+    await Promise.resolve();
+
+    expect(captured.stdoutText()).toBe('[api] loading\n[api] done\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('keeps the 64 KiB pending bound effective for unterminated output', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    // No terminator at all: the pending buffer drains via the bound instead of
+    // growing without limit.
+    child.stdout.write('y'.repeat(70 * 1024));
+    await Promise.resolve();
+    expect(captured.stdoutText()).toBe('[api] ' + 'y'.repeat(70 * 1024) + '\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('emits an over-long CR-terminated frame as a single line', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('x'.repeat(70 * 1024) + '\r');
+    await Promise.resolve();
+    expect(captured.stdoutText()).toBe('[api] ' + 'x'.repeat(70 * 1024) + '\n');
+
+    child.emitExit(0, null);
+    await running;
+  });
+
+  it('redacts a secret-like value that completes on a bare CR boundary', async () => {
+    const captured = createCapturedTerminalOutput();
+    const child = new FakeChild();
+
+    const running = superviseDevProcesses([spec('api')], {
+      output: captured.output,
+      spawnProcess: () => child,
+      signalSource: new FakeSignalSource(),
+    });
+
+    child.stdout.write('api_tok');
+    child.stdout.write('en=sk_live_ABCDEF0123456789\r');
+    await Promise.resolve();
+
+    const emitted = captured.stdoutText();
+    expect(emitted).not.toContain('sk_live_ABCDEF0123456789');
+    expect(emitted).toContain('api_token=[REDACTED]');
+
+    child.emitExit(0, null);
+    await running;
+  });
+});
