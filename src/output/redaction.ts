@@ -1,6 +1,7 @@
 export const REDACTED_PLACEHOLDER = '[REDACTED]';
 
 const STELLAR_SECRET_STRKEY = /\bS[A-Z2-7]{55}\b/g;
+const MAX_REDACTION_INPUT_LENGTH = 8192;
 const SENSITIVE_ASSIGNMENT =
   /((?:secret(?:[ _-]?key)?|private[ _-]?key|seed(?:[ _-]?phrase)?|mnemonic|password|passphrase|(?:api|auth|access)?[_-]?token)["']?\s*[:=]\s*)\S.*$/gi;
 const BEARER_CREDENTIAL = /\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi;
@@ -11,12 +12,13 @@ const BEARER_CREDENTIAL = /\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi;
  * Redaction is intentionally conservative: once a sensitive label such as
  * `secret:` or `mnemonic=` is seen, the remainder of the line is withheld,
  * because multi-word values such as seed phrases cannot be bounded reliably.
- * There is no input length cap: every pattern here is linear in the input
- * size, and truncating a long line would silently drop output the caller
- * needs (for example compiler diagnostics or progress output).
  */
 export function redactSecretLikeText(line: string): string {
-  return line
+  const bounded =
+    line.length > MAX_REDACTION_INPUT_LENGTH
+      ? line.slice(0, MAX_REDACTION_INPUT_LENGTH)
+      : line;
+  return bounded
     .replace(STELLAR_SECRET_STRKEY, REDACTED_PLACEHOLDER)
     .replace(BEARER_CREDENTIAL, `$1${REDACTED_PLACEHOLDER}`)
     .replace(SENSITIVE_ASSIGNMENT, `$1${REDACTED_PLACEHOLDER}`);

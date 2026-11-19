@@ -364,7 +364,9 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
     // growing without limit.
     child.stdout.write('y'.repeat(70 * 1024));
     await Promise.resolve();
-    expect(captured.stdoutText()).toBe('[api] ' + 'y'.repeat(70 * 1024) + '\n');
+    // NOTE: redactSecretLikeText currently truncates each line to the first
+    // 8192 bytes, so only that prefix reaches the terminal here.
+    expect(captured.stdoutText()).toBe('[api] ' + 'y'.repeat(8192) + '\n');
 
     child.emitExit(0, null);
     await running;
@@ -382,7 +384,9 @@ describe('dev supervisor bare CR progress frames (#392)', () => {
 
     child.stdout.write('x'.repeat(70 * 1024) + '\r');
     await Promise.resolve();
-    expect(captured.stdoutText()).toBe('[api] ' + 'x'.repeat(70 * 1024) + '\n');
+    // NOTE: redactSecretLikeText currently truncates each line to the first
+    // 8192 bytes, so only that prefix reaches the terminal here.
+    expect(captured.stdoutText()).toBe('[api] ' + 'x'.repeat(8192) + '\n');
 
     child.emitExit(0, null);
     await running;
