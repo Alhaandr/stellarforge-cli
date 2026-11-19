@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 export const DIAGNOSTIC_COMMAND_TIMEOUT_MS = 5_000;
+export const DIAGNOSTIC_KILL_SIGNAL_GRACE_MS = 1_000;
 
 export interface CommandResult {
   readonly status: number | null;
@@ -19,6 +20,7 @@ export const runCommand: RunCommand = (executable, args) => {
     encoding: 'utf8',
     shell: false,
     timeout: DIAGNOSTIC_COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
   });
 
   return {
