@@ -7,7 +7,6 @@ export function getBackendConfig(env = globalThis.process.env) {
     port: Number.parseInt(env.BACKEND_PORT ?? '3000', 10),
   };
 }
-
 export function createHealthPayload(env = {}) {
   const config = getBackendConfig(env);
 
