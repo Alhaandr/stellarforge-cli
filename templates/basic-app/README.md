@@ -39,6 +39,6 @@ The starter defaults to Stellar Testnet:
 - RPC: `https://soroban-testnet.stellar.org`
 - Network passphrase: `Test SDF Network ; September 2015`
 
-Override the public network endpoints with `STELLAR_HORIZON_URL`, `STELLAR_RPC_URL`, or `STELLAR_NETWORK_PASSPHRASE` when needed.
+Override the public network endpoints with `STELLAR_HORIZON_URL`, `STELLAR_RPC_URL`, or `STELLAR_NETWORK_PASSPHRASE` when needed; `.env.example` documents the defaults and contains only public Testnet values.
 
 Do not commit private keys, seed phrases, signing secrets, or production credentials to the project.
