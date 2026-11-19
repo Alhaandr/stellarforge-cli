@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { createNpmInvocation } from '../src/process/npm.js';
+import { buildCli } from './helpers/cli-process.js';
 
 const root = join(import.meta.dirname, '..');
 const packageJson = JSON.parse(
@@ -54,6 +55,47 @@ describe('npm pack content snapshot', () => {
         basename === '.env.example' || !/^\.env(?:\..*)?$/.test(basename),
       ).toBe(true);
       expect(path).not.toBe('.npmrc');
+    }
+  });
+});
+
+// SW-197: production builds keep source maps available for local
+// development/debugging, but the published package must never ship them (a
+// `.js.map`/`.d.ts.map` embeds build-machine-relative source paths and is
+// pure debugging overhead for end users), and compiled output must not leak
+// developer-local absolute filesystem paths.
+describe('source-map and stack-trace publish policy (SW-197)', () => {
+  it('builds source maps locally but excludes every .map file from the published package', () => {
+    buildCli();
+    expect(existsSync(join(root, 'dist', 'cli.js.map'))).toBe(true);
+    expect(existsSync(join(root, 'dist', 'cli.d.ts.map'))).toBe(true);
+
+    const entry = runPackDryRun();
+    const paths = entry.files.map((file) => file.path);
+
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.some((path) => path.endsWith('.js'))).toBe(true);
+    expect(paths.some((path) => path.endsWith('.d.ts'))).toBe(true);
+    for (const path of paths) {
+      expect(path.endsWith('.map')).toBe(false);
+    }
+  });
+
+  it('does not embed developer-local absolute paths in compiled output', () => {
+    buildCli();
+
+    const entry = runPackDryRun();
+    const localPathMarkers = [root.split(/[/\\]/).join('/'), 'node_modules'];
+
+    for (const file of entry.files) {
+      if (!file.path.endsWith('.js') && !file.path.endsWith('.d.ts')) {
+        continue;
+      }
+
+      const content = readFileSync(join(root, file.path), 'utf8');
+      for (const marker of localPathMarkers) {
+        expect(content).not.toContain(marker);
+      }
     }
   });
 });

@@ -2,6 +2,12 @@ export interface TextOutputStream {
   write(chunk: string): unknown;
   columns?: number;
   isTTY?: boolean;
+  // Optional: a Node Writable's 'drain' event (or equivalent) fired once the
+  // stream can accept more data after a write reported backpressure. Streams
+  // that don't support this (e.g. simple test doubles) are treated as never
+  // backpressured — callers only rely on this when `write` has already
+  // returned a falsy value.
+  once?(event: 'drain', listener: () => void): unknown;
 }
 
 export interface TerminalOutputStreams {
@@ -403,34 +409,57 @@ export class TerminalOutput {
     this.#columns = options.columns;
   }
 
-  info(message: string): void {
-    this.#write(this.#streams.stdout, message);
+  // Returns whether the destination stream can accept more data immediately
+  // (mirrors Writable#write's boolean): false signals backpressure, so a
+  // caller forwarding a high-volume source (e.g. a child process) can pause
+  // it and resume once `onceStdoutDrained`/`onceStderrDrained` fires.
+  info(message: string): boolean {
+    return this.#write(this.#streams.stdout, message);
   }
 
-  success(message: string): void {
-    this.#write(this.#streams.stdout, message);
+  success(message: string): boolean {
+    return this.#write(this.#streams.stdout, message);
   }
 
-  warning(message: string): void {
-    this.#write(this.#streams.stderr, message);
+  warning(message: string): boolean {
+    return this.#write(this.#streams.stderr, message);
   }
 
-  error(message: string): void {
-    this.#write(this.#streams.stderr, message);
+  error(message: string): boolean {
+    return this.#write(this.#streams.stderr, message);
   }
 
-  #write(stream: TextOutputStream, message: string): void {
+  onceStdoutDrained(listener: () => void): void {
+    this.#onceDrained(this.#streams.stdout, listener);
+  }
+
+  onceStderrDrained(listener: () => void): void {
+    this.#onceDrained(this.#streams.stderr, listener);
+  }
+
+  #write(stream: TextOutputStream, message: string): boolean {
     const sanitized = sanitizeTerminalText(message);
     const targetColumns =
       this.#columns ??
       (typeof stream.columns === 'number' && stream.columns > 0
         ? stream.columns
         : undefined);
+    const text =
+      targetColumns !== undefined && targetColumns > 0
+        ? wrapTerminalText(sanitized, targetColumns)
+        : sanitized;
 
-    if (targetColumns !== undefined && targetColumns > 0) {
-      stream.write(`${wrapTerminalText(sanitized, targetColumns)}\n`);
-    } else {
-      stream.write(`${sanitized}\n`);
+    return stream.write(`${text}\n`) !== false;
+  }
+
+  #onceDrained(stream: TextOutputStream, listener: () => void): void {
+    if (typeof stream.once === 'function') {
+      stream.once('drain', listener);
+      return;
     }
+
+    // No backpressure signal available: nothing to wait for, so proceed
+    // immediately rather than block forwarding forever.
+    listener();
   }
 }
