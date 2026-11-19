@@ -44,6 +44,15 @@ StellarForge code should expose platform differences deliberately instead of hid
 - npm, Cargo, and Stellar executables use their ordinary executable names;
 - generated projects and CLI subprocesses still use argument arrays rather than shell command concatenation.
 
+## Terminal and Non-TTY Output Handling
+
+StellarForge CLI enforces deterministic, readable terminal output across interactive terminals, redirected pipes, and non-TTY CI environments:
+
+- **Non-lossy wrapping policy:** When a terminal width (`columns`) is detected or explicitly configured, diagnostic messages and reports wrap at word boundaries without loss of textual content.
+- **Copyable paths and commands:** Long filesystem paths (both POSIX and Windows), URLs, backticked or quoted remediation commands, CLI flags, and Stellar cryptographic identifiers (StrKeys and Contract IDs) are treated as atomic unbreakable units. They remain copyable without ambiguous line splits or inserted breaks.
+- **Unicode display width awareness:** Grapheme-aware width calculation measures East Asian Wide (CJK) characters as 2 columns, emojis as 2 columns, and zero-width combining marks as 0 columns. Multi-byte sequences, surrogate pairs, and combining marks are never split or corrupted across lines.
+- **Non-TTY and redirected streams:** Streams with undefined width (such as non-TTY file redirections and CI stdout/stderr) do not introduce arbitrary column wrapping. ANSI escape sequences, OSC window-title commands, DEC cursor controls, and carriage returns are stripped to ensure deterministic snapshots that never depend on terminal color or cursor manipulation.
+
 ## External tools
 
 A green platform job validates StellarForge's code and tests on that OS; it does not guarantee every optional external tool is preinstalled on every runner.
