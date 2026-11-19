@@ -39,7 +39,7 @@ export interface DevOrchestratorOptions {
   readonly signalSource?: DevSignalSource;
 }
 
-function defaultSpawnProcess(
+export function defaultSpawnProcess(
   spec: DevProcessSpec,
   environment: NodeJS.ProcessEnv,
 ): ManagedChildProcess {

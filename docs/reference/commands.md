@@ -4,16 +4,16 @@ This reference documents the implemented StellarForge CLI MVP command surface.
 
 ## Command status
 
-| Command | Purpose | Status |
-| --- | --- | --- |
-| `stellarforge --help` | Show root usage and available commands | Implemented |
-| `stellarforge --version` | Show the installed CLI package version | Implemented |
-| `stellarforge new <project-name>` | Generate a supported StellarForge project | Implemented |
-| `stellarforge doctor` | Validate the local development toolchain | Implemented |
-| `stellarforge dev` | Start a supported generated Node.js project | Implemented |
-| `stellarforge test` | Run a supported project test workflow | Implemented |
-| `stellarforge deploy` | Deploy a supported smart-contract project to Stellar Testnet | Implemented |
-| `stellarforge add` | Add modules/plugins | Not implemented / post-v1 candidate |
+| Command                           | Purpose                                                      | Status                              |
+| --------------------------------- | ------------------------------------------------------------ | ----------------------------------- |
+| `stellarforge --help`             | Show root usage and available commands                       | Implemented                         |
+| `stellarforge --version`          | Show the installed CLI package version                       | Implemented                         |
+| `stellarforge new <project-name>` | Generate a supported StellarForge project                    | Implemented                         |
+| `stellarforge doctor`             | Validate the local development toolchain                     | Implemented                         |
+| `stellarforge dev`                | Start a supported generated Node.js project                  | Implemented                         |
+| `stellarforge test`               | Run a supported project test workflow                        | Implemented                         |
+| `stellarforge deploy`             | Deploy a supported smart-contract project to Stellar Testnet | Implemented                         |
+| `stellarforge add`                | Add modules/plugins                                          | Not implemented / post-v1 candidate |
 
 See also [Installation](../guides/installation.md), [Quick Start](../guides/quick-start.md), [Configuration](configuration.md), [Exit Codes](exit-codes.md), [Troubleshooting](troubleshooting.md#find-your-problem), [Platform Support](platform-support.md), and the repository [security guidance](../../SECURITY.md).
 
@@ -50,8 +50,8 @@ stellarforge new <project-name> [options]
 
 ### Options
 
-| Option | Meaning |
-| --- | --- |
+| Option                | Meaning                    |
+| --------------------- | -------------------------- |
 | `-t, --template <id>` | Select a bundled template. |
 
 Supported template IDs are:
@@ -207,9 +207,9 @@ stellarforge deploy --source release-deployer
 
 ### Options
 
-| Option | Meaning |
-| --- | --- |
-| `--network <network>` | Explicit deployment network. CLI value overrides project configuration. |
+| Option                | Meaning                                                                      |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `--network <network>` | Explicit deployment network. CLI value overrides project configuration.      |
 | `--source <identity>` | Named Stellar CLI identity alias. CLI value overrides project configuration. |
 
 The effective network and identity must both be present after configuration resolution.
@@ -225,6 +225,8 @@ stellar contract deploy --source-account deployer --network testnet
 ```
 
 No shell interpolation is used. Signing material remains under Stellar CLI identity management.
+
+Deployment output is validated against the official Stellar contract identifier format (`C...`, 56 characters Base32). Malformed, truncated, missing, or multiple conflicting contract IDs cannot be mistaken for deployment success.
 
 ### Exit behavior
 
