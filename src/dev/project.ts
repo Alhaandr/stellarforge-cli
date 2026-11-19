@@ -35,13 +35,19 @@ function readProjectPackage(projectRoot: string): ProjectPackage {
 
 function selectDevelopmentScript(scripts: Record<string, unknown>): string {
   for (const candidate of ['dev', 'start', 'start:backend']) {
-    if (typeof scripts[candidate] === 'string') {
+    const value = scripts[candidate];
+    // Blank and whitespace-only entries must not be selectable: npm treats
+    // them as a successful no-op, so `stellarforge dev` would report a
+    // workflow that starts no development process. Skip them.
+    if (typeof value === 'string' && value.trim().length > 0) {
       return candidate;
     }
   }
 
   throw new ValidationCliError(
-    'No supported development script was found. Expected one of: dev, start, start:backend.',
+    'No supported development script with a non-blank value was found. ' +
+      'Expected one of: dev, start, start:backend. ' +
+      'Add one to package.json "scripts" with a real command, e.g. "dev": "node src/index.ts".',
   );
 }
 

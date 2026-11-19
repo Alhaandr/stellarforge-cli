@@ -59,6 +59,10 @@ interface PrefixedLineWriter {
 
 // Child output is untrusted: buffer partial lines so secret-like values split
 // across chunks are still redacted as a whole before reaching the terminal.
+// Bare carriage returns are treated as line boundaries (progress-frame
+// separators): every frame is emitted as its own complete line, never as a
+// raw CR, so progress updates cannot overwrite terminal content already on
+// screen. A CR-terminated frame with no text creates no line at all.
 function createPrefixedLineWriter(
   output: TerminalOutput,
   label: string,
@@ -81,7 +85,7 @@ function createPrefixedLineWriter(
 
   return {
     write(chunk) {
-      const lines = `${pending}${String(chunk)}`.split(/\r?\n/);
+      const lines = `${pending}${String(chunk)}`.split(/\r?\n|\r/);
       pending = lines.pop() ?? '';
 
       for (const line of lines) {

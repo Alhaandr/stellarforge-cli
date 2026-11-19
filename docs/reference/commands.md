@@ -127,6 +127,8 @@ The command requires a valid project `package.json` with a `scripts` object. Scr
 2. `start`;
 3. `start:backend`.
 
+A candidate counts as present only when it is a string with a non-blank value; blank or whitespace-only entries are ignored in favour of the next candidate. If every supported candidate is blank or absent, the command fails with actionable guidance before any subprocess is spawned.
+
 StellarForge invokes npm as an executable with an argument array; it does not execute the package script text through a constructed shell command.
 
 Child stdout/stderr are streamed with process labels.
