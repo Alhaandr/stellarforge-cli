@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import process from 'node:process';
+import { setInterval, setTimeout } from 'node:timers';
 /**
  * Test fixture: Simulates an executable that ignores termination signals.
  * Usage: node timeout-helper.js <behavior>
