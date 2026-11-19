@@ -222,6 +222,10 @@ export function generateProjectFromTemplate(
     }
   }
 
+  const realDestinationParentAtStart = existsSync(destinationParent)
+    ? realpathSync(destinationParent)
+    : undefined;
+
   const stagingRoot = mkdtempSync(
     join(destinationParent, `.stellarforge-${context.input.projectName}-`),
   );
@@ -233,7 +237,38 @@ export function generateProjectFromTemplate(
       templateId: context.template.templateId,
     });
 
-    if (destinationExisted) {
+    // Re-validate immediately before the mutating write phase. The checks
+    // above can be invalidated by a concurrent destination replacement while
+    // copyTemplateTree was still running (it only writes into the unrelated
+    // staging directory, never into `destination`), so this closes the
+    // time-of-check/time-of-use gap rather than relying on the earlier check.
+    assertDestinationContainment(root, destination);
+
+    if (
+      realDestinationParentAtStart !== undefined &&
+      (!existsSync(destinationParent) ||
+        realpathSync(destinationParent) !== realDestinationParentAtStart)
+    ) {
+      throw new ValidationCliError(
+        'Project destination escapes its validated parent directory.',
+      );
+    }
+
+    if (existsSync(destination)) {
+      const destinationStat = lstatSync(destination);
+
+      if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) {
+        throw new ValidationCliError(
+          'Project destination is not a safe empty directory.',
+        );
+      }
+
+      if (readdirSync(destination).length > 0) {
+        throw new ValidationCliError(
+          'Project destination must be empty before generation.',
+        );
+      }
+
       rmdirSync(destination);
       removedExistingDestination = true;
     }
