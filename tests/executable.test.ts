@@ -101,7 +101,7 @@ describe('StellarForge CLI executable', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("error: unknown command 'not-a-command'");
     expect(result.stderr).toContain(
-      'Available commands: doctor, new, dev, test, deploy.',
+      'Available commands: doctor, new, dev, test, deploy, validate.',
     );
     expect(result.stderr).not.toContain(
       'StellarForge encountered an unexpected error.',

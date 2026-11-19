@@ -147,6 +147,20 @@ Secret-bearing fields such as private keys, seed phrases, tokens, passwords, or 
 
 See [Configuration](configuration.md).
 
+## `stellarforge validate` reports required project failures
+
+`stellarforge validate` checks the current directory against the documented local project requirements and reports each finding with a stable id, category, and severity. Findings fall into:
+
+- `project.manifest-present` — a supported manifest (`package.json` or `Cargo.toml`) must exist at the project root;
+- `project.package-json.parseable` — an existing `package.json` must be valid JSON declaring an object `scripts` field;
+- `project.package-json.scripts-test` — informational: declares whether `scripts.test` is a non-empty string (a warning only, never an exit failure by itself);
+- `project.cargo-toml.parseable` — an existing `Cargo.toml` must be valid UTF-8 declaring `[package]` or `[workspace]`;
+- `project.configuration.well-formed` — an existing `stellarforge.config.json` must pass [configuration](configuration.md) validation.
+
+Only *required*-check failures make the command exit with code `5`; a `0` exit means the documented required requirements are met. The command never prints secret values or absolute paths, and remediation text tells you exactly how to fix each finding.
+
+See [Commands](commands.md#stellarforge-validate).
+
 ## Deployment network is required
 
 Provide either project configuration:

@@ -13,6 +13,7 @@ This reference documents the implemented StellarForge CLI MVP command surface.
 | `stellarforge dev` | Start a supported generated Node.js project | Implemented |
 | `stellarforge test` | Run a supported project test workflow | Implemented |
 | `stellarforge deploy` | Deploy a supported smart-contract project to Stellar Testnet | Implemented |
+| `stellarforge validate` | Check documented local project requirements | Implemented |
 | `stellarforge add` | Add modules/plugins | Not implemented / post-v1 candidate |
 
 See also [Installation](../guides/installation.md), [Quick Start](../guides/quick-start.md), [Configuration](configuration.md), [Exit Codes](exit-codes.md), [Troubleshooting](troubleshooting.md#find-your-problem), [Platform Support](platform-support.md), and the repository [security guidance](../../SECURITY.md).
@@ -235,6 +236,42 @@ No shell interpolation is used. Signing material remains under Stellar CLI ident
 - `3` — Stellar CLI fails to start or returns a failure.
 
 See [Configuration](configuration.md) and the deployment sections of [Troubleshooting](troubleshooting.md#deployment-network-is-required): [network required](troubleshooting.md#deployment-network-is-required), [Mainnet or Futurenet rejection](troubleshooting.md#deployment-rejects-mainnet-or-futurenet), [identity rejected](troubleshooting.md#deployment-identity-is-rejected), and [Stellar CLI deployment fails](troubleshooting.md#stellar-cli-deployment-fails).
+
+## `stellarforge validate`
+
+Checks the current directory against StellarForge's documented local project requirements.
+
+### Usage
+
+```bash
+cd my-project
+stellarforge validate
+```
+
+### Contract
+
+The command reports one finding per check, each with a stable id, category, label, severity, message, and (optionally) a remediation hint. Nothing about the current directory's contents or configuration values is echoed beyond these curated, bounded messages; absolute paths are never printed.
+
+Findings:
+
+| Id | Category | Required | Meaning |
+| --- | --- | --- | --- |
+| `project.manifest-present` | `project` | yes | at least one of `package.json` or `Cargo.toml` exists |
+| `project.package-json.parseable` | `package-manifest` | yes | an existing `package.json` is valid JSON object declaring a `scripts` object |
+| `project.package-json.scripts-test` | `package-manifest` | no | `package.json` declares a non-empty `scripts.test` command (warning only) |
+| `project.cargo-toml.parseable` | `cargo-manifest` | yes | an existing `Cargo.toml` is valid UTF-8 declaring `[package]` or `[workspace]` |
+| `project.configuration.well-formed` | `configuration` | yes | an existing `stellarforge.config.json` passes validation (see [Configuration](configuration.md)) |
+
+Only *required*-check failures set the exit code `5` (diagnostic failure); a `0` exit means the documented required requirements are met. The `scripts.test` finding is informational and never changes the exit code by itself.
+
+### Exit behavior
+
+- `0` — all required local project requirements are met;
+- `5` — one or more required project validation checks failed.
+
+Unsupported or planned behavior remains unchanged: `stellarforge add`, plugin execution, and remote template registries are still not implemented.
+
+See [Troubleshooting](troubleshooting.md#stellarforge-validate-reports-required-project-failures).
 
 ## Unsupported or planned behavior
 
