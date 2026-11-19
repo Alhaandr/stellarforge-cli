@@ -56,8 +56,10 @@ describe('generated template .gitignore policy', () => {
     ).toEqual([...TEMPLATE_IDS].sort());
   });
 
-  it.each(TEMPLATE_IDS)('%s ignores local state without hiding project files', (id) =>
-    withTempDirectory((root) => {
+  it.each(TEMPLATE_IDS)(
+    '%s ignores local state without hiding project files',
+    (id) =>
+      withTempDirectory((root) => {
       const ignoreFile = readFileSync(
         join(repositoryRoot, 'templates', id, '.gitignore'),
         'utf8',
@@ -77,13 +79,19 @@ describe('generated template .gitignore policy', () => {
 
       for (const path of ignored) {
         const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
-        expect(result.status, `${id}: expected ${path} to be ignored: ${result.stderr}`).toBe(0);
+        expect(
+          result.status,
+          `${id}: expected ${path} to be ignored: ${result.stderr}`,
+        ).toBe(0);
       }
 
       for (const path of TRACKABLE_FILES) {
         const result = git(root, ['check-ignore', '--no-index', '-q', '--', path]);
-        expect(result.status, `${id}: expected ${path} to remain trackable: ${result.stderr}`).toBe(1);
+        expect(
+          result.status,
+          `${id}: expected ${path} to remain trackable: ${result.stderr}`,
+        ).toBe(1);
       }
-    }),
+      }),
   );
 });
