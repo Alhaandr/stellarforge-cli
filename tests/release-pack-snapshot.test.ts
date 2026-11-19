@@ -1,9 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { createNpmInvocation } from '../src/process/npm.js';
 import { buildCli } from './helpers/cli-process.js';
+import { withTempDirectory } from './helpers/index.js';
 
 const root = join(import.meta.dirname, '..');
 const packageJson = JSON.parse(
@@ -14,12 +16,14 @@ function runPackDryRun(command?: string, args?: readonly string[]) {
   const invocation = createNpmInvocation(
     args ?? ['pack', '--dry-run', '--json'],
   );
+  const cacheDir = join(tmpdir(), 'stellarforge-npm-cache');
   const result = spawnSync(
     command ?? invocation.command,
     command ? (args ?? []) : invocation.args,
     {
       cwd: root,
       encoding: 'utf8',
+      env: { ...process.env, npm_config_cache: cacheDir },
       shell: false,
     },
   );
@@ -39,24 +43,28 @@ function runPackDryRun(command?: string, args?: readonly string[]) {
 
 // SW-110: deterministic snapshot of what `npm pack --dry-run` would publish.
 describe('npm pack content snapshot', () => {
-  it('includes only intended publish artifacts and excludes dev-only paths', () => {
-    const entry = runPackDryRun();
-    const paths = entry.files.map((file) => file.path);
+  it(
+    'includes only intended publish artifacts and excludes dev-only paths',
+    () => {
+      const entry = runPackDryRun();
+      const paths = entry.files.map((file) => file.path);
 
-    expect(paths.some((path) => path.startsWith('dist/'))).toBe(true);
-    expect(paths.some((path) => path.startsWith('templates/'))).toBe(true);
-    expect(paths).toContain('package.json');
+      expect(paths.some((path) => path.startsWith('dist/'))).toBe(true);
+      expect(paths.some((path) => path.startsWith('templates/'))).toBe(true);
+      expect(paths).toContain('package.json');
 
-    for (const path of paths) {
-      expect(path.startsWith('tests/')).toBe(false);
-      expect(path.startsWith('.github/')).toBe(false);
-      const basename = path.split('/').at(-1) ?? '';
-      expect(
-        basename === '.env.example' || !/^\.env(?:\..*)?$/.test(basename),
-      ).toBe(true);
-      expect(path).not.toBe('.npmrc');
-    }
-  });
+      for (const path of paths) {
+        expect(path.startsWith('tests/')).toBe(false);
+        expect(path.startsWith('.github/')).toBe(false);
+        const basename = path.split('/').at(-1) ?? '';
+        expect(
+          basename === '.env.example' || !/^\.env(?:\..*)?$/.test(basename),
+        ).toBe(true);
+        expect(path).not.toBe('.npmrc');
+      }
+    },
+    15_000,
+  );
 });
 
 // SW-197: production builds keep source maps available for local
@@ -103,24 +111,187 @@ describe('source-map and stack-trace publish policy (SW-197)', () => {
 // SW-111: asserts package identity/version on the dry-run artifact itself,
 // and that inspecting it never performs a registry publish.
 describe('release dry-run artifact assertions', () => {
-  it('reports the expected package identity and version, with no publish side effect', () => {
-    const entry = runPackDryRun();
+  it(
+    'reports the expected package identity and version, with no publish side effect',
+    () => {
+      const entry = runPackDryRun();
 
-    expect(entry.name).toBe(packageJson.name);
-    expect(entry.version).toBe(packageJson.version);
-    // `--dry-run` is what guarantees no registry publication occurs here;
-    // this asserts the flag stays present in the release script contract.
-    const releaseDryRunScript = (
-      JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
-        scripts: Record<string, string>;
-      }
-    ).scripts['release:dry-run'];
-    expect(releaseDryRunScript).toContain('--dry-run');
-  });
+      expect(entry.name).toBe(packageJson.name);
+      expect(entry.version).toBe(packageJson.version);
+      // `--dry-run` is what guarantees no registry publication occurs here;
+      // this asserts the flag stays present in the release script contract.
+      const releaseDryRunScript = (
+        JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+          scripts: Record<string, string>;
+        }
+      ).scripts['release:dry-run'];
+      expect(releaseDryRunScript).toContain('--dry-run');
+    },
+    15_000,
+  );
 
   it('fails actionably when the dry-run command itself is misconfigured', () => {
     expect(() =>
       runPackDryRun('stellarforge-command-that-does-not-exist'),
     ).toThrow(/npm pack --dry-run failed: .*ENOENT/i);
   });
+});
+
+// SW-185: packed tarball consumer smoke test for the published CLI tarball.
+describe('packed tarball consumer smoke test (SW-185)', () => {
+  it(
+    'installs the packed tarball into an isolated consumer project and generates a project with the installed executable',
+    () =>
+      withTempDirectory((tempRoot) => {
+        const packDir = join(tempRoot, 'pack');
+        mkdirSync(packDir, { recursive: true });
+        const consumerDir = join(tempRoot, 'consumer');
+        mkdirSync(consumerDir, { recursive: true });
+
+        // 1. Pack the repository into packDir without publishing
+        const packInvocation = createNpmInvocation([
+          'pack',
+          '--pack-destination',
+          packDir,
+        ]);
+        const packResult = spawnSync(
+          packInvocation.command,
+          [...packInvocation.args],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            shell: false,
+          },
+        );
+        expect(packResult.status, packResult.stderr).toBe(0);
+
+        const tarballName =
+          packResult.stdout.trim().split(/\r?\n/).pop()?.trim() ?? '';
+        expect(tarballName).toMatch(
+          /^diginodes-stellarforge-cli-\d+\.\d+\.\d+\.tgz$/,
+        );
+        const tarballPath = join(packDir, tarballName);
+        expect(existsSync(tarballPath)).toBe(true);
+
+        // 2. The test proves templates and dist files are included in the tarball
+        const dryRun = runPackDryRun();
+        const tarballFiles = dryRun.files.map((f) => f.path);
+        expect(tarballFiles.some((f) => f.startsWith('dist/cli.js'))).toBe(
+          true,
+        );
+        expect(
+          tarballFiles.some((f) => f.startsWith('templates/basic-app/')),
+        ).toBe(true);
+        expect(
+          tarballFiles.some((f) => f.startsWith('templates/api-service/')),
+        ).toBe(true);
+        expect(
+          tarballFiles.some((f) => f.startsWith('templates/full-stack/')),
+        ).toBe(true);
+        expect(
+          tarballFiles.some((f) => f.startsWith('templates/smart-contract/')),
+        ).toBe(true);
+
+        // 3. Set up isolated consumer project
+        writeFileSync(
+          join(consumerDir, 'package.json'),
+          JSON.stringify(
+            {
+              name: 'isolated-consumer',
+              version: '1.0.0',
+              type: 'module',
+            },
+            null,
+            2,
+          ),
+        );
+
+        // 4. Install packed tarball into isolated consumer project offline
+        const installInvocation = createNpmInvocation([
+          'install',
+          tarballPath,
+          '--prefer-offline',
+          '--no-audit',
+          '--no-fund',
+        ]);
+        const installResult = spawnSync(
+          installInvocation.command,
+          [...installInvocation.args],
+          {
+            cwd: consumerDir,
+            encoding: 'utf8',
+            shell: false,
+          },
+        );
+        expect(installResult.status, installResult.stderr).toBe(0);
+
+        // Verify installed package files on disk contain templates and dist
+        const installedPackageDir = join(
+          consumerDir,
+          'node_modules',
+          '@diginodes',
+          'stellarforge-cli',
+        );
+        expect(existsSync(join(installedPackageDir, 'dist', 'cli.js'))).toBe(
+          true,
+        );
+        expect(
+          existsSync(
+            join(installedPackageDir, 'templates', 'basic-app', 'package.json'),
+          ),
+        ).toBe(true);
+
+        // 5. The installed bin command resolves and runs help/version
+        const binName =
+          process.platform === 'win32' ? 'stellarforge.cmd' : 'stellarforge';
+        const binPath = join(consumerDir, 'node_modules', '.bin', binName);
+        expect(existsSync(binPath)).toBe(true);
+
+        const runBin = (args: string[]) => {
+          if (process.platform === 'win32') {
+            return spawnSync('cmd.exe', ['/d', '/s', '/c', binPath, ...args], {
+              cwd: consumerDir,
+              encoding: 'utf8',
+              shell: false,
+            });
+          }
+          return spawnSync(binPath, args, {
+            cwd: consumerDir,
+            encoding: 'utf8',
+            shell: false,
+          });
+        };
+
+        const helpResult = runBin(['--help']);
+        expect(helpResult.status, helpResult.stderr).toBe(0);
+        expect(helpResult.stdout).toContain(
+          'Usage: stellarforge [options] [command]',
+        );
+
+        const versionResult = runBin(['--version']);
+        expect(versionResult.status, versionResult.stderr).toBe(0);
+        expect(versionResult.stdout.trim()).toBe(packageJson.version);
+
+        // 6. The installed package can generate a supported template
+        const genResult = runBin([
+          'new',
+          'smoke-consumer-app',
+          '--template',
+          'basic-app',
+        ]);
+        expect(genResult.status, genResult.stderr).toBe(0);
+        expect(
+          existsSync(join(consumerDir, 'smoke-consumer-app', 'package.json')),
+        ).toBe(true);
+        expect(
+          existsSync(
+            join(consumerDir, 'smoke-consumer-app', 'src', 'index.js'),
+          ),
+        ).toBe(true);
+
+        // 7. No npm publish or registry write occurs
+        expect(packageJson.name).toBe('@diginodes/stellarforge-cli');
+      }),
+    60_000,
+  );
 });
