@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { clearTimeout, setImmediate, setTimeout } from 'node:timers';
+import { setImmediate, setTimeout } from 'node:timers';
 import { getConfig } from '../src/config.js';
 import { createApiServer } from '../src/server.js';
 import {
