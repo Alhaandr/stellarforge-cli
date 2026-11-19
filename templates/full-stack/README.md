@@ -41,7 +41,27 @@ The starter has no build step and no runtime dependencies; `frontend/src/app.js`
 npm run start:backend
 ```
 
-The backend exposes `GET /health` on `127.0.0.1:3000` by default. Set `BACKEND_PORT` to override the port. This starter targets Stellar Testnet only; it does not configure or claim Mainnet or hosted deployment support.
+The backend exposes `GET /health` on `127.0.0.1:3000` by default. Set `BACKEND_PORT` to override the port. The frontend has no server and no port variable at all.
+
+If the configured port is already in use, startup fails with a raw Node error such as:
+
+```text
+Error: listen EADDRINUSE: address already in use 127.0.0.1:3000
+```
+
+That message is printed by the operating system, not by the backend. The port shown in the error matches `BACKEND_PORT` (or the `3000` default when it is not set), and the bind address is always `127.0.0.1`.
+
+Resolve it safely by either changing the port or stopping only a process you recognize as your own:
+
+1. Change the port:
+   - the backend does not automatically load `.env`, so set `BACKEND_PORT` in your environment or in the environment manager of your choice (for example `BACKEND_PORT=3100 npm run start:backend`);
+2. Or find and stop only the process you recognize as your own previous instance:
+   - Windows: `netstat -ano | findstr :3000` shows the owning PID; stop it with `taskkill /PID <pid> /T`;
+   - macOS/Linux: `lsof -i :3000` shows the owning process; stop it with `kill <pid>`;
+   - inspect what the process actually is first — handle only the one you started yourself, for example an earlier instance of this backend;
+   - never kill arbitrary processes that happen to hold the port; avoid task-name kills such as `taskkill /IM node.exe`, broad `pkill` matching, and `kill -9`.
+
+The backend never hops ports automatically; it always binds exactly the configured port, which makes collisions visible instead of hiding on a random one. This starter targets Stellar Testnet only; it does not configure or claim Mainnet or hosted deployment support.
 
 ## API Boundaries and Request Handling
 

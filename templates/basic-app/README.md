@@ -21,6 +21,12 @@ npm run check
 npm test
 ```
 
+## Port already in use (EADDRINUSE)
+
+This starter opens no listening socket at all — `npm start` only prints the configured endpoints. `EADDRINUSE` cannot occur with the starter as generated, and the documented environment variables point at remote Stellar services, not local ports.
+
+If you add your own local server to this application, pick a free port entirely under your control; if it collides with another process, the operating system will report `EADDRINUSE` just like for any other application. Resolve such collisions by changing the port you configure, or by stopping only the process you recognize as your own previous instance.
+
 ## Notes
 
 This template is intended as a minimal starting point for Stellar dApps. For production deployments, configure your own RPC and Horizon endpoints and secure any signing keys appropriately.

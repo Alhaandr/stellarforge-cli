@@ -16,6 +16,30 @@ npm start
 
 By default the service listens on `http://127.0.0.1:3000` and uses Stellar Testnet public endpoint configuration.
 
+### Port already in use (EADDRINUSE)
+
+If the configured port is already in use, startup fails with a raw Node error such as:
+
+```text
+Error: listen EADDRINUSE: address already in use 127.0.0.1:3000
+```
+
+That message is printed by the operating system, not by the service. The port shown in the error matches `API_PORT` (or the `3000` default when it is not set), and the bind address matches `API_HOST`.
+
+Resolve it safely by either changing the port or stopping only a process you recognize as your own:
+
+1. Change the port:
+   - set `API_PORT=3100` in the environment, or in `.env` (`API_PORT=3100`) together with `node --env-file=.env src/start.js`;
+   - `API_HOST` is the interface to bind, not the port — it selects the local interface the server listens on;
+   - the port must be an integer between 1 and 65535 — an invalid `API_PORT` is rejected at startup before the listener is created, so a bad value can never be mistaken for "port in use";
+2. Or find and stop only the process you recognize as your own previous instance:
+   - Windows: `netstat -ano | findstr :3000` shows the owning PID; stop it with `taskkill /PID <pid> /T`;
+   - macOS/Linux: `lsof -i :3000` shows the owning process; stop it with `kill <pid>`;
+   - inspect what the process actually is first — handle only the one you started yourself, for example an earlier instance of this service;
+   - never kill arbitrary processes that happen to hold the port; avoid task-name kills such as `taskkill /IM node.exe`, broad `pkill` matching, and `kill -9`.
+
+The service never hops ports automatically; it always binds exactly the configured address and port, so collisions stay visible instead of hiding on a random port.
+
 Available routes:
 
 - `GET /health` – liveness probe; always answers locally in bounded time, with no configuration values, no initialization state, and no Stellar calls. Not for routing traffic. Responds `200 {"status":"ok"}`;
