@@ -211,6 +211,8 @@ A failed external process returns exit category `3`.
 
 See the [`deploy` command reference](commands.md#stellarforge-deploy).
 
+If StellarForge reports a local deployment timeout, it has stopped the local process tree but cannot determine whether the remote network accepted the submission. Check the transaction result manually before retrying; StellarForge does not retry timed-out deployments.
+
 ## Unexpected or internal failure
 
 Exit code `1` (unexpected failure) and exit code `4` (internal failure) intentionally print a generic message and do not expose the original error message or stack trace. See the [rendering rules](exit-codes.md#rendering-rules).
