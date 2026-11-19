@@ -52,6 +52,10 @@ class FakeChild implements ManagedChildProcess {
   }
 
   emitExit(code: number | null, signal: NodeJS.Signals | null): void {
+    // Completion requires both the exit event and stdio to have ended, so
+    // every fixture must close both streams alongside the exit.
+    this.stdout.end();
+    this.stderr.end();
     this.#exitListener?.(code, signal);
   }
 }
