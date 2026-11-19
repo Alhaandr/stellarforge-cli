@@ -9,6 +9,8 @@ interface ManagedStream {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
   on(event: 'end', listener: () => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
+  pause(): unknown;
+  resume(): unknown;
 }
 
 export interface ManagedChildProcess {
@@ -53,9 +55,78 @@ function defaultSpawnProcess(
 
 const MAX_BUFFERED_LINE_LENGTH = 64 * 1024;
 
+// Upper bound on complete lines queued for a single child stream while its
+// destination is backpressured. A noisy child can otherwise outpace a slow or
+// redirected output sink and accumulate an unbounded in-memory queue; once
+// this bound is hit the oldest queued lines are dropped (with a one-time
+// notice) so memory stays bounded even if the destination never drains.
+const MAX_QUEUED_OUTPUT_LINES = 1000;
+
 interface PrefixedLineWriter {
   write(chunk: Buffer | string): void;
   end(): void;
+}
+
+interface BoundedForwarder {
+  push(line: string): void;
+}
+
+// Forwards complete lines to the destination one at a time. If a write
+// reports backpressure (returns false), the owning child stream is paused and
+// further lines accumulate in a bounded queue; once the destination signals
+// it has drained, queued lines resume flowing and the child stream is resumed
+// only once the queue is fully flushed. Each stream (stdout/stderr) gets its
+// own forwarder, so pausing one never blocks or interleaves the other.
+function createBoundedForwarder(
+  emitLine: (line: string) => boolean,
+  onceDrained: (listener: () => void) => void,
+  pauseChildStream: () => void,
+  resumeChildStream: () => void,
+  reportOverflow: () => void,
+): BoundedForwarder {
+  const queue: string[] = [];
+  let childPaused = false;
+  let overflowed = false;
+
+  const flush = (): void => {
+    while (queue.length > 0) {
+      const line = queue.shift()!;
+
+      if (!emitLine(line)) {
+        if (!childPaused) {
+          childPaused = true;
+          pauseChildStream();
+        }
+
+        onceDrained(flush);
+        return;
+      }
+    }
+
+    if (childPaused) {
+      childPaused = false;
+      resumeChildStream();
+    }
+  };
+
+  return {
+    push(line) {
+      queue.push(line);
+
+      if (queue.length > MAX_QUEUED_OUTPUT_LINES) {
+        queue.shift();
+
+        if (!overflowed) {
+          overflowed = true;
+          reportOverflow();
+        }
+      }
+
+      if (!childPaused) {
+        flush();
+      }
+    },
+  };
 }
 
 // Child output is untrusted: buffer partial lines so secret-like values split
@@ -70,22 +141,42 @@ function createPrefixedLineWriter(
   output: TerminalOutput,
   label: string,
   isError: boolean,
+  childStream: ManagedStream,
 ): PrefixedLineWriter {
   let pending = '';
   let ended = false;
   const decoder = new TextDecoder('utf-8');
+  let overflowReported = false;
+
+  const emitLine = (line: string): boolean =>
+    isError ? output.warning(line) : output.info(line);
+  const onceDrained = (listener: () => void): void =>
+    isError
+      ? output.onceStderrDrained(listener)
+      : output.onceStdoutDrained(listener);
+  const forwarder = createBoundedForwarder(
+    emitLine,
+    onceDrained,
+    () => childStream.pause(),
+    () => childStream.resume(),
+    () => {
+      if (overflowReported) {
+        return;
+      }
+
+      overflowReported = true;
+      output.warning(
+        `[${label}] output buffer exceeded ${MAX_QUEUED_OUTPUT_LINES} queued lines; oldest lines were dropped due to sustained backpressure.`,
+      );
+    },
+  );
 
   const emit = (line: string): void => {
     if (line.length === 0) {
       return;
     }
 
-    const message = `[${label}] ${redactSecretLikeText(line)}`;
-    if (isError) {
-      output.warning(message);
-    } else {
-      output.info(message);
-    }
+    forwarder.push(`[${label}] ${redactSecretLikeText(line)}`);
   };
 
   // Splits decoded text into complete lines, keeping the trailing partial
@@ -256,8 +347,18 @@ export async function superviseDevProcesses(
         children.push(child);
         const state: ChildState = {
           label: spec.label,
-          stdoutWriter: createPrefixedLineWriter(output, spec.label, false),
-          stderrWriter: createPrefixedLineWriter(output, spec.label, true),
+          stdoutWriter: createPrefixedLineWriter(
+            output,
+            spec.label,
+            false,
+            child.stdout,
+          ),
+          stderrWriter: createPrefixedLineWriter(
+            output,
+            spec.label,
+            true,
+            child.stderr,
+          ),
           stdoutDone: false,
           stderrDone: false,
           exited: false,
