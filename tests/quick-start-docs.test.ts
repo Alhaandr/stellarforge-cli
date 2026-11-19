@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateStellarForgeConfig } from '../src/config/schema.js';
 import { resolveDevProcessPlan } from '../src/dev/project.js';
@@ -97,5 +97,176 @@ describe('Quick Start documentation', () => {
     );
     expect(quickStart).not.toContain('defaults to Mainnet');
     expect(quickStart).not.toContain('default network is mainnet');
+  });
+});
+
+describe('public documentation link integrity (SW-203)', () => {
+  function walkMarkdown(dir: string): string[] {
+    const out: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (
+        entry.name === 'node_modules' ||
+        entry.name === '.git' ||
+        entry.name === 'dist'
+      ) {
+        continue;
+      }
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...walkMarkdown(path));
+      else if (entry.name.endsWith('.md')) out.push(path);
+    }
+    return out;
+  }
+
+  // The public surface under test: the front door, everything under docs/,
+  // and the generated template READMEs that ship to npm. Paths are relative
+  // to the repository root for readable failure messages.
+  const publicDocs = [
+    'README.md',
+    ...walkMarkdown(join(root, 'docs')).map((path) =>
+      path.slice(root.length + 1),
+    ),
+    ...walkMarkdown(join(root, 'templates')).map((path) =>
+      path.slice(root.length + 1),
+    ),
+  ].sort();
+
+  function stripCodeFences(text: string): string {
+    const lines = text.split('\n');
+    let inFence = false;
+    return lines
+      .map((line) => {
+        const trimmed = line.trimStart();
+        if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+          inFence = !inFence;
+          return '';
+        }
+        return inFence ? '' : line;
+      })
+      .join('\n');
+  }
+
+  function slugify(headings: string): Set<string> {
+    // A GitHub-compatible heading slugger: strips inline markup, lowercases,
+    // drops everything outside letters/numbers/spaces/underscores/hyphens,
+    // converts spaces to hyphens, and disambiguates duplicates with -N.
+    const counts = new Map<string, number>();
+    const anchors = new Set<string>();
+
+    for (const raw of headings.split(/\r?\n/)) {
+      const match = raw.trimEnd().match(/^(#{1,6})\s+(.*)$/);
+      if (!match) {
+        continue;
+      }
+
+      let slug = match[2]
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/[`*_~]/g, '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N} _-]/gu, '')
+        .replace(/\s+/g, '-');
+
+      const occurrences = counts.get(slug) ?? 0;
+      counts.set(slug, occurrences + 1);
+      if (occurrences > 0) {
+        slug = `${slug}-${occurrences}`;
+      }
+      anchors.add(slug);
+    }
+
+    return anchors;
+  }
+
+  function lineNumberOf(text: string, index: number): number {
+    return text.slice(0, index).split('\n').length;
+  }
+
+  const EXTERNAL_SCHEME = /^(https?:|mailto:|ftp:|tel:|data:|javascript:)/i;
+  const LINK_RE = /\[([^\]]*)\]\(([^)\s]+?)(\s+"[^"]*")?\)/g;
+
+  it('covers the documented public surface deterministically', () => {
+    expect(publicDocs.length).toBeGreaterThan(0);
+    expect(publicDocs).toContain('README.md');
+    for (const templateId of [
+      'basic-app',
+      'full-stack',
+      'smart-contract',
+      'api-service',
+    ]) {
+      expect(
+        publicDocs.some((path) =>
+          path.replace(/\\/g, '/').includes(`templates/${templateId}/README.md`),
+        ),
+      ).toBe(true);
+    }
+    expect([...publicDocs].sort()).toEqual(publicDocs);
+  });
+
+  it('resolves every relative link and local anchor without network access', () => {
+    const anchorCache = new Map<string, Set<string>>();
+    const anchorsFor = (absolutePath: string) => {
+      let cached = anchorCache.get(absolutePath);
+      if (!cached) {
+        cached = slugify(readFileSync(absolutePath, 'utf8'));
+        anchorCache.set(absolutePath, cached);
+      }
+      return cached;
+    };
+
+    const failures: string[] = [];
+
+    for (const rel of publicDocs) {
+      const normalized = join(root, rel);
+      const text = readFileSync(normalized, 'utf8');
+      const scanned = stripCodeFences(text);
+      const baseDir = join(root, dirname(rel));
+
+      for (const match of scanned.matchAll(LINK_RE)) {
+        const rawTarget = match[2];
+        const index = match.index ?? 0;
+        const line = lineNumberOf(scanned, index);
+
+        if (EXTERNAL_SCHEME.test(rawTarget) || rawTarget.startsWith('//')) {
+          // External URLs are explicitly out of scope and never fetched.
+          continue;
+        }
+
+        let target = rawTarget;
+        try {
+          target = decodeURIComponent(rawTarget);
+        } catch {
+          // A percent sequence we cannot decode is itself broken.
+          failures.push(`${rel}:${line} undecodable link target: ${rawTarget}`);
+          continue;
+        }
+
+        const [pathPart, anchor] = target.split('#', 2);
+
+        if (pathPart === '') {
+          if (anchor && !anchorsFor(normalized).has(anchor)) {
+            failures.push(`${rel}:${line} unknown local anchor: #${anchor}`);
+          }
+          continue;
+        }
+
+        const targetPath = resolve(baseDir, pathPart);
+
+        if (!existsSync(targetPath)) {
+          failures.push(`${rel}:${line} unresolved link target: ${pathPart}`);
+          continue;
+        }
+
+        if (anchor && targetPath.endsWith('.md')) {
+          if (!anchorsFor(targetPath).has(anchor)) {
+            failures.push(
+              `${rel}:${line} unknown anchor #${anchor} in ${pathPart}`,
+            );
+          }
+        }
+      }
+    }
+
+    expect(failures, failures.join('\n')).toEqual([]);
   });
 });
