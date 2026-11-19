@@ -18,8 +18,18 @@ By default the service listens on `http://127.0.0.1:3000` and uses Stellar Testn
 
 Available routes:
 
-- `GET /health` — local service health and configured Stellar network;
-- `GET /stellar/network` — configured public Horizon and RPC endpoints only.
+- `GET /health` – liveness probe; always answers locally in bounded time, with no configuration values, no initialization state, and no Stellar calls. Not for routing traffic. Responds `200 {"status":"ok"}`;
+- `GET /ready` – readiness probe; answers `200 {"status":"ready"}` once required initialization (configuration and boundary setup) completes, and `503 {"status":"unavailable"}` while initializing or after a failure. The body never carries configuration values or internal error details;
+- `GET /stellar/network` – configured public Horizon and RPC endpoints (only while readiness is `ready`).
+
+### Health checks
+
+The service exposes two probes with different contracts:
+
+- `GET /health` (liveness) is synchronous, dependency-free, and answers within a bounded time even while initialization is stuck or failing. It exists so a process supervisor can distinguish "process is wedged" from "process is alive but not ready"; it is not a statement about configuration, network reachability, or Stellar services.
+- `GET /ready` (readiness) reports whether the required initialization completed. Initialization is bounded by `INITIALIZATION_TIMEOUT_MS` (1 second by default, injectable in `createRequestHandler` options); a timed-out or failed initialization reports `503` with a generic body. An initialization failure never appears in response bodies – operators see one generic startup log line instead.
+
+Both probes return `application/json`, respond `404 {"error":"not_found"}` to non-`GET` methods and to any other path, and never perform Stellar RPC/Horizon calls or embed configuration.
 
 ## Environment configuration
 
@@ -32,11 +42,11 @@ node --env-file=.env src/start.js
 
 Supported values and defaults:
 
-- `API_HOST` — local interface to bind (default: `127.0.0.1`);
-- `API_PORT` — port number between 1 and 65535 (default: `3000`);
-- `STELLAR_NETWORK` — network identifier such as `TESTNET`, `FUTURENET`, or `STANDALONE` (default: `TESTNET`);
-- `STELLAR_HORIZON_URL` — Horizon API endpoint (default: `https://horizon-testnet.stellar.org`);
-- `STELLAR_RPC_URL` — Soroban RPC endpoint (default: `https://soroban-testnet.stellar.org`).
+- `API_HOST` – local interface to bind (default: `127.0.0.1`);
+- `API_PORT` – port number between 1 and 65535 (default: `3000`);
+- `STELLAR_NETWORK` – network identifier such as `TESTNET`, `FUTURENET`, or `STANDALONE` (default: `TESTNET`);
+- `STELLAR_HORIZON_URL` – Horizon API endpoint (default: `https://horizon-testnet.stellar.org`);
+- `STELLAR_RPC_URL` – Soroban RPC endpoint (default: `https://soroban-testnet.stellar.org`).
 
 ### Validation rules
 
