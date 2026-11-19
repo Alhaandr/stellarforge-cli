@@ -53,9 +53,8 @@ afterEach(() => {
 
 describe('generator destination race (TOCTOU)', () => {
   it('rejects when the destination is replaced with a symlink mid-generation', async () => {
-    const { generateProjectFromTemplate } = await import(
-      '../src/generator/template-generation.js'
-    );
+    const { generateProjectFromTemplate } =
+      await import('../src/generator/template-generation.js');
 
     await withTempDirectory(async (root) => {
       const templateRoot = createTemplate(root);
@@ -93,9 +92,8 @@ describe('generator destination race (TOCTOU)', () => {
   });
 
   it('rejects when an ancestor of the destination parent is swapped mid-generation', async () => {
-    const { generateProjectFromTemplate } = await import(
-      '../src/generator/template-generation.js'
-    );
+    const { generateProjectFromTemplate } =
+      await import('../src/generator/template-generation.js');
 
     await withTempDirectory(async (root) => {
       const templateRoot = createTemplate(root);
@@ -132,9 +130,8 @@ describe('generator destination race (TOCTOU)', () => {
   });
 
   it('still succeeds for ordinary generation with no interference', async () => {
-    const { generateProjectFromTemplate } = await import(
-      '../src/generator/template-generation.js'
-    );
+    const { generateProjectFromTemplate } =
+      await import('../src/generator/template-generation.js');
 
     await withTempDirectory(async (root) => {
       const templateRoot = createTemplate(root);

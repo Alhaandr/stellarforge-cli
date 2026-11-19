@@ -24,8 +24,7 @@ class FakeChild implements ManagedChildProcess {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   #exitListener:
-    | ((code: number | null, signal: NodeJS.Signals | null) => void)
-    | undefined;
+    ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
 
   once(event: 'error', listener: (error: Error) => void): this;
   once(
@@ -193,9 +192,9 @@ describe('dev supervisor output backpressure (SW-208)', () => {
     expect(controllable.written.some((line) => line.includes('line-0\n'))).toBe(
       true,
     );
-    expect(controllable.written.some((line) => line.includes('line-50\n'))).toBe(
-      false,
-    );
+    expect(
+      controllable.written.some((line) => line.includes('line-50\n')),
+    ).toBe(false);
     expect(
       controllable.written.some((line) => line.includes('line-1099')),
     ).toBe(true);
