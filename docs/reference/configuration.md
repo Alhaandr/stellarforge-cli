@@ -60,6 +60,7 @@ The file must:
 - be a regular file rather than a symbolic link;
 - be no larger than 64 KiB;
 - contain valid JSON;
+- contain no duplicate object keys at any nesting level (escaped-equivalent spellings are treated as the same key);
 - contain only supported schema fields.
 
 Validation failures are designed to be actionable without echoing raw file contents or sensitive values.
