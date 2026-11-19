@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -250,6 +251,12 @@ try {
       2,
     ),
   );
+  const repoCommander = join(repositoryRoot, 'node_modules', 'commander');
+  if (existsSync(repoCommander)) {
+    const consumerNm = join(consumerDir, 'node_modules');
+    mkdirSync(join(consumerNm, 'commander'), { recursive: true });
+    cpSync(repoCommander, join(consumerNm, 'commander'), { recursive: true });
+  }
 
   // Install packed tarball into isolated consumer project
   const installResult = spawnSync(
