@@ -145,6 +145,7 @@ See [SECURITY.md](SECURITY.md), the [threat model](docs/architecture/threat-mode
 | `stellarforge dev` | Orchestrate supported local development | Implemented |
 | `stellarforge test` | Run supported project tests | Implemented |
 | `stellarforge deploy` | Deploy through the MVP Testnet workflow | Implemented |
+| `stellarforge validate` | Check local project requirements | Implemented |
 | `stellarforge --help` | Display CLI usage/help | Implemented |
 | `stellarforge --version` | Display CLI version | Implemented |
 

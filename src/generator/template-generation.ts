@@ -27,6 +27,12 @@ export interface TemplateGenerationOptions {
   readonly dryRun?: boolean;
 }
 
+/** Filename of the generated project provenance marker. */
+export const GENERATED_MARKER_FILENAME = '.stellarforge.json';
+
+/** Package identifier recorded in the generated provenance marker. */
+export const GENERATOR_PACKAGE_NAME = '@diginodes/stellarforge-cli';
+
 function isWithin(root: string, candidate: string): boolean {
   const pathFromRoot = relative(root, candidate);
 
