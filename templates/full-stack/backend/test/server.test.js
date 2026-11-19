@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { once } from 'node:events';
+import http from 'node:http';
 import test from 'node:test';
-import { createHealthPayload, getBackendConfig } from '../src/server.js';
+import {
+  createBackendServer,
+  createHealthPayload,
+  getBackendConfig,
+  MAX_REQUEST_BODY_BYTES,
+} from '../src/server.js';
 
 test('uses safe Testnet defaults without secrets', () => {
   const config = getBackendConfig({});
@@ -17,4 +25,279 @@ test('returns a generated application health payload', () => {
     app: '{{projectName}}',
     network: 'TESTNET',
   });
+});
+
+test('health route answers GET and HEAD with status 200', async () => {
+  const server = createBackendServer({ STELLAR_NETWORK: 'TESTNET' });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const getRes = await globalThis.fetch(`${baseUrl}/health`);
+    assert.equal(getRes.status, 200);
+    assert.equal(getRes.headers.get('content-type'), 'application/json');
+    assert.equal(getRes.headers.get('x-content-type-options'), 'nosniff');
+    const getPayload = await getRes.json();
+    assert.equal(getPayload.status, 'ok');
+    assert.equal(getPayload.app, '{{projectName}}');
+    assert.equal(getPayload.network, 'TESTNET');
+
+    const headRes = await globalThis.fetch(`${baseUrl}/health`, {
+      method: 'HEAD',
+    });
+    assert.equal(headRes.status, 200);
+    assert.equal(headRes.headers.get('content-type'), 'application/json');
+    const headText = await headRes.text();
+    assert.equal(headText, '');
+  } finally {
+    server.close();
+  }
+});
+
+test('health route returns deterministic 405 with Allow header for unsupported methods', async () => {
+  const server = createBackendServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+      const res = await globalThis.fetch(`${baseUrl}/health`, { method });
+      assert.equal(res.status, 405);
+      assert.equal(res.headers.get('allow'), 'GET, HEAD');
+      assert.equal(res.headers.get('content-type'), 'application/json');
+      const payload = await res.json();
+      assert.deepEqual(payload, { error: 'method_not_allowed' });
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('unknown routes return safe 404 response without information leakage', async () => {
+  const server = createBackendServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    for (const path of ['/', '/unknown', '/health/nested', '/api/not-found']) {
+      const getRes = await globalThis.fetch(`${baseUrl}${path}`);
+      assert.equal(getRes.status, 404);
+      assert.equal(getRes.headers.get('content-type'), 'application/json');
+      assert.deepEqual(await getRes.json(), { error: 'not_found' });
+
+      const postRes = await globalThis.fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+      });
+      assert.equal(postRes.status, 404);
+      assert.deepEqual(await postRes.json(), { error: 'not_found' });
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/echo accepts valid JSON and enforces method boundary', async () => {
+  const server = createBackendServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    // Valid POST
+    const postRes = await globalThis.fetch(`${baseUrl}/api/echo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello stellar' }),
+    });
+    assert.equal(postRes.status, 200);
+    const postPayload = await postRes.json();
+    assert.deepEqual(postPayload, {
+      status: 'ok',
+      data: { message: 'hello stellar' },
+    });
+
+    // Unsupported GET on /api/echo returns 405 with Allow: POST
+    const getRes = await globalThis.fetch(`${baseUrl}/api/echo`);
+    assert.equal(getRes.status, 405);
+    assert.equal(getRes.headers.get('allow'), 'POST');
+    assert.deepEqual(await getRes.json(), { error: 'method_not_allowed' });
+  } finally {
+    server.close();
+  }
+});
+
+test('rejects unsupported content types with 415 on JSON routes', async () => {
+  const server = createBackendServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    for (const contentType of ['text/plain', 'application/xml', 'text/html']) {
+      const res = await globalThis.fetch(`${baseUrl}/api/echo`, {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: 'raw content',
+      });
+      assert.equal(res.status, 415);
+      const payload = await res.json();
+      assert.deepEqual(payload, { error: 'unsupported_media_type' });
+    }
+
+    // Missing content-type header
+    const missingRes = await globalThis.fetch(`${baseUrl}/api/echo`, {
+      method: 'POST',
+      body: '{"foo":"bar"}',
+    });
+    assert.equal(missingRes.status, 415);
+  } finally {
+    server.close();
+  }
+});
+
+test('rejects malformed JSON with 400 Bad Request', async () => {
+  const server = createBackendServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const res = await globalThis.fetch(`${baseUrl}/api/echo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{ invalid json payload, missing quotes ',
+    });
+    assert.equal(res.status, 400);
+    const payload = await res.json();
+    assert.deepEqual(payload, { error: 'malformed_json' });
+  } finally {
+    server.close();
+  }
+});
+
+test('rejects oversized request bodies before unbounded buffering', async () => {
+  // Test with a small maxBodyBytes boundary of 128 bytes
+  const limit = 128;
+  const server = createBackendServer({}, { maxBodyBytes: limit });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    // Payload exceeding limit by declared Content-Length
+    const oversizedBody = JSON.stringify({
+      data: 'x'.repeat(limit + 50),
+    });
+
+    const res = await globalThis.fetch(`${baseUrl}/api/echo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: oversizedBody,
+    });
+    assert.equal(res.status, 413);
+    const payload = await res.json();
+    assert.deepEqual(payload, { error: 'payload_too_large' });
+
+    // Payload within limit succeeds
+    const acceptableBody = JSON.stringify({ ok: true });
+    assert.ok(Buffer.byteLength(acceptableBody) <= limit);
+
+    const okRes = await globalThis.fetch(`${baseUrl}/api/echo`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: acceptableBody,
+    });
+    assert.equal(okRes.status, 200);
+    assert.deepEqual(await okRes.json(), {
+      status: 'ok',
+      data: { ok: true },
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('rejects chunked streamed body exceeding maxBodyBytes during transfer', async () => {
+  const limit = 256;
+  const server = createBackendServer({}, { maxBodyBytes: limit });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+
+    // Make low-level request using node:http to stream chunks without Content-Length
+    const statusPromise = new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: address.port,
+          path: '/api/echo',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'transfer-encoding': 'chunked',
+          },
+        },
+        (res) => {
+          let raw = '';
+          res.on('data', (c) => (raw += c));
+          res.on('end', () => {
+            resolve({
+              statusCode: res.statusCode,
+              body: raw ? JSON.parse(raw) : null,
+            });
+          });
+        },
+      );
+
+      req.on('error', (err) => {
+        // Connection may be reset when server destroys stream; handle gracefully
+        resolve({ error: err });
+      });
+
+      // Stream small chunk then an oversized chunk
+      req.write('{"chunk": "');
+      req.write('a'.repeat(limit + 100));
+      req.write('"}');
+      req.end();
+    });
+
+    const result = await statusPromise;
+    if (result.statusCode) {
+      assert.equal(result.statusCode, 413);
+      assert.deepEqual(result.body, { error: 'payload_too_large' });
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('default MAX_REQUEST_BODY_BYTES bound is 64 KiB', () => {
+  assert.equal(MAX_REQUEST_BODY_BYTES, 65536);
 });
