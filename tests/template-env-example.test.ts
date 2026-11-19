@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -297,6 +297,6 @@ describe('template .env.example safety and drift (SW-195)', () => {
 
     expect(String((error as Error).message)).not.toContain(PASSWORD_FIXTURE);
     expect(String((error as Error).message)).not.toContain(TOKEN_FIXTURE);
-    expect(String((error as Error).message.length)).toBeLessThan(120);
+    expect((error as Error).message.length).toBeLessThan(120);
   });
 });

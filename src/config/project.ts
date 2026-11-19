@@ -27,7 +27,7 @@ function abort(): never {
   throw new ScanAbort('duplicate-key scan aborted');
 }
 
-function isWhitespace(char: string): boolean {
+function isWhitespace(char: string | undefined): boolean {
   return (
     char === ' ' || char === '\t' || char === '\n' || char === '\r'
   );
@@ -106,7 +106,7 @@ function decodeJsonString(
           if (code >= 0xd800 && code <= 0xdbff) {
             const pairHex = raw.slice(position + 6, position + 12);
             const pairMatch = /^\\u([0-9a-fA-F]{4})$/.exec(pairHex);
-            if (!pairMatch) {
+            if (!pairMatch || pairMatch[1] === undefined) {
               abort();
             }
 
@@ -131,6 +131,10 @@ function decodeJsonString(
           abort();
       }
       continue;
+    }
+
+    if (char === undefined) {
+      abort();
     }
 
     chars.push(char);
