@@ -113,7 +113,11 @@ function createPrefixedLineWriter(
 
       // String chunks are passed through untouched for tests; byte chunks
       // stream through the decoder, holding incomplete trailing sequences.
-      feed(typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true }));
+      feed(
+        typeof chunk === 'string'
+          ? chunk
+          : decoder.decode(chunk, { stream: true }),
+      );
     },
     end() {
       if (ended) {
@@ -277,7 +281,10 @@ export async function superviseDevProcesses(
             state.stdoutWriter.end();
           }
 
-          fail(`Development process '${state.label}' stdout stream failed.`, error);
+          fail(
+            `Development process '${state.label}' stdout stream failed.`,
+            error,
+          );
         });
         child.stderr.on('data', (chunk) => state.stderrWriter.write(chunk));
         child.stderr.on('end', () => {
@@ -291,7 +298,10 @@ export async function superviseDevProcesses(
             state.stderrWriter.end();
           }
 
-          fail(`Development process '${state.label}' stderr stream failed.`, error);
+          fail(
+            `Development process '${state.label}' stderr stream failed.`,
+            error,
+          );
         });
         child.once('error', (error) => {
           fail(`Development process '${spec.label}' failed to start.`, error);

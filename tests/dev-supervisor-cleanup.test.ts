@@ -37,7 +37,8 @@ class FakeChild implements ManagedChildProcess {
   readonly killedSignals: NodeJS.Signals[] = [];
   #errorListener: ((error: Error) => void) | undefined;
   #exitListener:
-    ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    | ((code: number | null, signal: NodeJS.Signals | null) => void)
+    | undefined;
 
   once(event: 'error', listener: (error: Error) => void): this;
   once(
@@ -235,9 +236,7 @@ describe('supervisor stream error handling (#389)', () => {
   it('fails with a stable category and sanitizes the raw stream error', async () => {
     const child = new FakeChild();
     const captured = createCapturedTerminalOutput();
-    const rawError = new Error(
-      'read ECONNRESET /home/dev/secret/path/iso.bin',
-    );
+    const rawError = new Error('read ECONNRESET /home/dev/secret/path/iso.bin');
 
     const running = superviseDevProcesses(specs('api'), {
       output: captured.output,

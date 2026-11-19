@@ -33,7 +33,8 @@ class FakeChild implements ManagedChildProcess {
   readonly killedSignals: NodeJS.Signals[] = [];
   #errorListener: ((error: Error) => void) | undefined;
   #exitListener:
-    ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    | ((code: number | null, signal: NodeJS.Signals | null) => void)
+    | undefined;
 
   once(event: 'error', listener: (error: Error) => void): this;
   once(
@@ -498,7 +499,9 @@ describe('dev supervisor UTF-8 chunk decoding (#205)', () => {
 
     // The held bytes cannot be completed; the stream end flushes them as U+FFFD.
     child.stdout.write(Buffer.from([0xe2, 0x82]));
-    const ended = new Promise<void>((resolve) => child.stdout.once('end', resolve));
+    const ended = new Promise<void>((resolve) =>
+      child.stdout.once('end', resolve),
+    );
     child.stdout.end();
     await ended;
     await Promise.resolve();
@@ -521,7 +524,10 @@ describe('dev supervisor UTF-8 chunk decoding (#205)', () => {
 
     // A complete assignment whose multi-byte é is split across chunks: redaction only
     // works when the line is reassembled before it reaches the terminal.
-    const line = Buffer.from('note=café; api_token=sk_live_ABCDEF0123456789\n', 'utf8');
+    const line = Buffer.from(
+      'note=café; api_token=sk_live_ABCDEF0123456789\n',
+      'utf8',
+    );
     child.stdout.write(line.subarray(0, 9)); // cuts inside the multi-byte é
     child.stdout.write(line.subarray(9));
     await Promise.resolve();
